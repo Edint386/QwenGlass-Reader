@@ -1,0 +1,28 @@
+[project]
+name = "glassreader"
+version = "0.1.0"
+description = "TXT novel reader for Qwen AI glasses: the computer paginates and renders pages, a Waft-DSL page turns them with temple swipes, MCP tools open books and jump"
+requires-python = ">=3.12"
+dependencies = [
+    "Pillow>=10.0",
+    "mcp>=2.3,<3",
+    "starlette>=0.40",
+    "uvicorn>=0.30",
+]
+
+[project.scripts]
+glassreader = "glassreader.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-timeout>=2", "httpx>=0.27"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["glassreader"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 120
