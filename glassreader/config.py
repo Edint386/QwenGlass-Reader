@@ -140,7 +140,7 @@ class Settings:
         return f"{self.base_url}/mcp"
 
     def page_prefix(self, book_id: str, session: str) -> str:
-        """页面 dataSource 里的 ``u``：页面在后面拼 ``/<六个计数>.png``。"""
+        """页面 dataSource 里的 ``u``：页面在后面拼 ``/<计数>.png``。"""
         return f"{self.base_url}/r/{self.key}/{book_id}/{session}"
 
     def mcp_allowed_hosts(self) -> list[str]:

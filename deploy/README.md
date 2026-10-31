@@ -1,11 +1,11 @@
 # glassreader 上线：`https://cast.example.com/reader/`
 
-**状态（2026-10-30）**：已按 §3 执行并在真机上用起来了。§2 的只读检查 2026-10-29 做过；服务器上 `openresty -t` 通过后 reload，公网 `/reader/healthz` 200、MCP 列出 4 个工具；局域网转发器已换成本目录的版本并带 `--route` 运行。
+> 云端运行见 [cloud/README.md](cloud/README.md)。本文记录之前的 Mac + 隧道方案，留作回滚。
 
-目标：不新建域名和证书（DNS 在 DNSPod，这边没法操作），让 glassreader 和 glasscast 共用 `cast.example.com`，按路径分流：
+目标：不新建域名和证书，让 glassreader 和 glasscast 共用 `cast.example.com`，按路径分流：
 
 ```
-平台（MCP）/ 在外的手机 ──https──► 新加坡 OpenResty ──┬─ /reader/…  ─► 127.0.0.1:18780 ══SSH══► Mac 127.0.0.1:8780  glassreader
+平台（MCP）/ 在外的手机 ──https──► 服务器 OpenResty ──┬─ /reader/…  ─► 127.0.0.1:18780 ══SSH══► Mac 127.0.0.1:8780  glassreader
                                                       └─ 其余        ─► 127.0.0.1:18766 ══SSH══► Mac 127.0.0.1:8766  glasscast
 在家里的手机（路由器把域名解析到 Mac）──https──► Mac :443 lan_https_proxy ──┬─ /reader/… ─► 127.0.0.1:8780
                                                                           └─ 其余       ─► 127.0.0.1:8766
@@ -26,7 +26,7 @@
 
 ## 1. 设计取舍
 
-- **路径前缀而不是新域名**：新域名要 DNS 记录和证书，DNSPod 这边操作不了；前缀方案只动 OpenResty。glasscast 的路由（`/s/…`、`/mcp`、`/healthz`）不受影响：nginx 前缀匹配取最长，`^~ /reader/` 比 `root.conf` 的 `^~ /` 长。
+- **路径前缀而不是新域名**：新域名要 DNS 记录和证书；前缀方案只动 OpenResty。glasscast 的路由（`/s/…`、`/mcp`、`/healthz`）不受影响：nginx 前缀匹配取最长，`^~ /reader/` 比 `root.conf` 的 `^~ /` 长。
 - **单独的 `proxy/reader.conf` 而不是改 `root.conf`**：回滚就是删一个文件；`root.conf` 已经手改过（`/admin/` 404、rewrite），少碰它。前提是站点主配置 `include` 了 `proxy/*.conf`（§2 第二条检查）。
 - **白名单式转发**：只放行 glassreader 实际有的三类路径，`/reader/` 下其他一律 404（同 glasscast 方案 P 的写法）。页图 location 关访问日志（地址里有 key）；`/reader/mcp`、`/reader/healthz` 照常记日志，排查平台超时要看。
 - **另开一条隧道，而不是给 glasscast 的隧道多加一个 `-R`**：两个进程互不影响，重启一个不断另一个；保温请求打 `$PUBLIC_URL/healthz` = `/reader/healthz`，reader 的 upstream 池也是热的（冷连接约 0.7 s，平台工具超时 3 s）。多加 `-R` 的写法在 `tunnel.sh` 注释里，不推荐。

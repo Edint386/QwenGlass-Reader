@@ -2,8 +2,9 @@
 
 ==============================================  ==============================================================
 ``GET /healthz``                                ``200 ok``
-``GET /r/{key}/{book}/{session}/{n}.png``       当前页的 4 级灰度 PNG。``n`` 是页面的六个累计计数 ``a-b-j-k-f-g``，
+``GET /r/{key}/{book}/{session}/{n}.png``       当前页的 4 级灰度 PNG。``n`` 是页面的累计计数（``a-b-j-k-…``），
                                                 按差值移动阅读位置（:meth:`~glassreader.library.Library.turn`）
+``GET /r/{key}/{book}/{session}/title.png``     左栏竖排书名图
 ``GET /r/{key}/{book}/{session}/{n}.jpg``       同上，JPEG（真机不显示 PNG 时的退路，research §7 P1）
 ``/mcp``                                        MCP streamable HTTP（stateless + JSON 响应），Bearer 鉴权
 ==============================================  ==============================================================
@@ -54,7 +55,8 @@ COMMON_HEADERS: tuple[tuple[str, str], ...] = (
     ("access-control-allow-origin", "*"),
     ("cross-origin-resource-policy", "cross-origin"),
 )
-_PAGE_FILE = re.compile(r"^([0-9]{1,9}(?:-[0-9]{1,9}){0,5})\.(png|jpg)$")
+_PAGE_FILE = re.compile(r"^([0-9]{1,9}(?:-[0-9]{1,9}){0,12})\.(png|jpg)$")
+_TITLE_FILE = re.compile(r"^title(?:-[0-9]{1,9})*\.png$")
 _BOOK_ID = re.compile(r"^[0-9a-f]{10}$")
 _SESSION = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 _KEY_IN_PATH = re.compile(r"^/r/[^/]+")
@@ -210,13 +212,21 @@ def create_app(
     async def page(request: Request) -> Response:
         p = request.path_params
         m = _PAGE_FILE.match(p["file"])
+        title = _TITLE_FILE.match(p["file"])
         if (
             not hmac.compare_digest(str(p["key"]).encode("utf-8"), key)
-            or not m
+            or not (m or title)
             or not _BOOK_ID.match(p["book"])
             or not _SESSION.match(p["session"])
         ):
             return not_found()
+        if title:
+            def render_book_title() -> bytes | None:
+                book = library.book(p["book"])
+                return None if book is None else library.title_image(book)
+
+            png = await anyio.to_thread.run_sync(render_book_title)
+            return not_found() if png is None else Response(png, media_type="image/png")
         counters, ext = parse_counters(m.group(1)), m.group(2)
 
         def render() -> tuple[bytes, dict[str, str]] | None:

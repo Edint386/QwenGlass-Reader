@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew QwenGlass-Reader TLS certificate
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/glassreader/renew-cert.sh

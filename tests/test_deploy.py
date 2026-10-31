@@ -20,6 +20,7 @@ from glassreader.server import MCP_PATH
 
 ROOT = Path(__file__).resolve().parent.parent
 DEPLOY = ROOT / "deploy"
+CLOUD = DEPLOY / "cloud"
 UPSTREAM = DEPLOY / "1panel" / "zz-glassreader-upstream.conf"
 SITE = DEPLOY / "1panel" / "reader.conf"
 TUNNEL = DEPLOY / "tunnel.sh"
@@ -131,3 +132,18 @@ def test_review_diff_is_current(tmp_path: Path) -> None:
     shutil.copy(OLD_PROXY, target)
     subprocess.run(["patch", "-s", str(target), str(DEPLOY / "lan_https_proxy.diff")], check=True, capture_output=True)
     assert target.read_text(encoding="utf-8") == PROXY.read_text(encoding="utf-8")
+
+
+def test_cloud_site_matches_compose_and_serves_only_glassreader_paths() -> None:
+    compose = (CLOUD / "compose.yaml").read_text(encoding="utf-8")
+    site = (CLOUD / "site.https.conf").read_text(encoding="utf-8")
+    host_port, container_port = re.search(r"127\.0\.0\.1:(\d+):(\d+)", compose).groups()
+    assert f"server 127.0.0.1:{host_port} " in site
+    assert int(container_port) == DEFAULT_PORT
+    assert re.findall(r"location\s+(?:=|\^~)?\s*(\S+)\s*\{", site) == ["/healthz", "/r/", MCP_PATH, "/"]
+
+
+def test_cloud_image_has_the_fallback_fonts() -> None:
+    dockerfile = (CLOUD / "Dockerfile").read_text(encoding="utf-8")
+    for package in ("fonts-noto-cjk", "fonts-noto-core", "fonts-dejavu-core", "fonts-unifont"):
+        assert package in dockerfile

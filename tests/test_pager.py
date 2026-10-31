@@ -3,20 +3,26 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageFont
 
+from glassreader import pager
 from glassreader.book import Book
 from glassreader.pager import (
     FONT_SIZES,
     NO_LINE_END,
     NO_LINE_START,
+    TITLE_SIZE,
+    WEIGHTS,
     Layout,
+    _title_layout,
     _widths,
     layout_for,
     paginate_chapter,
     render_page,
+    render_title,
     wrap,
 )
 
@@ -100,6 +106,44 @@ def test_render_page_png() -> None:
     assert all(gray.getpixel(xy) == 0 for xy in [(0, 0), (477, 0), (0, 289), (477, 289)])
 
 
+def test_body_is_solid_and_header_stays_dim() -> None:
+    book = Book.load(SAMPLES / "雾港来信.txt")
+    cp = paginate_chapter(book, 3, Layout())
+    img = Image.open(io.BytesIO(render_page(book, cp, 1, Layout()))).convert("L")
+    assert img.crop((0, 0, 478, 20)).getextrema()[1] <= 85  # 页眉是辅助信息，不能跟着变亮
+    hist = img.crop((0, 30, 478, 268)).histogram()
+    assert hist[255] / sum(hist[1:]) > 0.5  # 字边不发虚：超过一半的亮像素是满亮
+
+
+def _lit(data: bytes) -> tuple[int, int]:
+    """亮像素个数和最亮的灰度值。"""
+    gray = Image.open(io.BytesIO(data)).convert("L")
+    return sum(gray.histogram()[1:]), gray.getextrema()[1]
+
+
+def test_weight_makes_strokes_heavier() -> None:
+    book = Book.load(SAMPLES / "雾港来信.txt")
+    cp = paginate_chapter(book, 3, Layout())
+    counts = [_lit(render_page(book, cp, 1, Layout(), weight=w))[0] for w in range(len(WEIGHTS))]
+    assert counts == sorted(counts) and counts[0] < counts[-1]
+
+
+@pytest.mark.parametrize(("title", "size", "columns"), [
+    ("雾港来信", 24, ["雾港来信"]),
+    ("示例长书名七字 - 某作者", 20, ["示例长书名七字", "某作者"]),
+    ("一二三四五六七八", 20, ["一二三四", "五六七八"]),
+    ("一" * 18, 14, ["一" * 9, "一" * 9]),
+    ("一" * 30, 14, ["一" * 9, "一" * 8 + "…"]),
+])
+def test_title_layout(title: str, size: int, columns: list[str]) -> None:
+    assert _title_layout(title) == (size, columns)
+
+
+def test_render_title() -> None:
+    img = Image.open(io.BytesIO(render_title("示例长书名七字 - 某作者")))
+    assert img.format == "PNG" and img.size == TITLE_SIZE and len(img.getcolors()) <= 4
+
+
 def test_render_unquantized_is_bigger() -> None:
     book = Book.load(SAMPLES / "雾港来信.txt")
     cp = paginate_chapter(book, 3, Layout())
@@ -109,5 +153,52 @@ def test_render_unquantized_is_bigger() -> None:
 def test_render_long_chapter_title_is_truncated() -> None:
     book = Book.parse("第一章 " + "很长的章节名" * 4 + "\n正文。\n", title="t")
     assert len(book.chapters[0].title) > 20
+    data = render_page(book, paginate_chapter(book, 0, Layout()), 0, Layout())
+    assert Image.open(io.BytesIO(data)).size == (478, 290)
+
+
+def test_font_falls_back_when_the_macos_font_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    fallback = next((s for s in (pager.HEITI, pager.NOTO_SANS) if Path(s[0]).exists()), None)
+    if fallback is None:
+        pytest.skip("这台机器上没有中文字体")
+    monkeypatch.setattr(pager, "NOTO_SANS", fallback)
+    pager._font.cache_clear()
+    try:
+        assert pager._font(("/nonexistent.ttc", 0), 24).path == fallback[0]
+    finally:
+        pager._font.cache_clear()
+
+
+def test_missing_glyph_is_drawn_by_the_next_font(monkeypatch: pytest.MonkeyPatch) -> None:
+    fallback = next((s for s in (pager.HEITI, pager.NOTO_SANS) if Path(s[0]).exists()), None)
+    if fallback is None:
+        pytest.skip("这台机器上没有中文字体")
+    monkeypatch.setattr(pager, "FALLBACK_FONTS", ("/nonexistent.ttf", fallback[0]))
+    pager._fallback_fonts.cache_clear()
+    main = ImageFont.load_default(24)  # Pillow 内置字体没有中文
+    try:
+        assert pager._covering_font(main, "A") is main
+        assert pager._covering_font(main, "中").path == fallback[0]
+        assert pager._covering_font(main, "\U0010fffd") is main  # 谁都没有：留给主字体
+    finally:
+        pager._fallback_fonts.cache_clear()
+
+
+def test_marks_and_control_chars_take_no_width() -> None:
+    widths = _widths(Layout().font, 24)
+    for ch in ("\u0301", "\u0e34", "\u200b", "\ufe0f"):
+        assert widths[ch] == 0
+
+
+def test_mark_stays_on_the_line_of_its_base() -> None:
+    widths = _widths(Layout().font, 24)
+    text = "(๑" * 40 + "\u0301"
+    lines = pager.wrap("字\u0301" * 40, 0, 200, widths, 0) + pager.wrap(text, 0, 200, widths, 0)
+    assert len(lines) > 2
+    assert not any(line.text[0] == "\u0301" for line in lines)
+
+
+def test_render_page_with_kaomoji() -> None:
+    book = Book.parse("第一章\n(๑¯ิ\u200b▽¯ิ๑)" + "嘿" * 40 + "\n", title="t")
     data = render_page(book, paginate_chapter(book, 0, Layout()), 0, Layout())
     assert Image.open(io.BytesIO(data)).size == (478, 290)

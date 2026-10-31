@@ -61,13 +61,33 @@ def test_page_jpg(client: TestClient, book_id: str) -> None:
     assert r.content[:3] == b"\xff\xd8\xff"
 
 
+def test_title_image(client: TestClient, book_id: str) -> None:
+    r = client.get(f"/r/{KEY}/{book_id}/s1/title.png")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+    assert_common_headers(r)
+    assert client.get(f"/r/WrongKey/{book_id}/s1/title.png").status_code == 404
+    assert client.get(f"/r/{KEY}/0000000000/s1/title.png").status_code == 404
+
+
+def test_title_does_not_move_the_position(client: TestClient, book_id: str) -> None:
+    first = client.get(page_url(book_id, "0-0-0-0-0-0-0"))
+    client.get(f"/r/{KEY}/{book_id}/s1/title.png")
+    assert client.get(page_url(book_id, "0-0-0-0-0-0-0")).headers["X-Reader-Page"] == first.headers["X-Reader-Page"]
+
+
+def test_saved_settings_in_the_address(client: TestClient, book_id: str) -> None:
+    assert client.get(page_url(book_id, "0-0-0-0-0-0-0-0-0")).status_code == 200
+    r = client.get(page_url(book_id, "0-0-0-0-0-0-5-0-0"))
+    assert r.status_code == 200 and client.app.state.library.display.weight == 4
+
+
 def test_turning_pages(client: TestClient, book_id: str) -> None:
     pages = [client.get(page_url(book_id, f"{n}-0-0-0-0-0")).headers["x-reader-page"] for n in (0, 0, 1, 1, 2)]
     # 首次只记基线；重复地址不动；每加一翻一页
     assert pages[0] == pages[1] and pages[2] == pages[3] != pages[0]
     r = client.get(page_url(book_id, "2-0-1-0-0-0"))
     assert r.headers["x-reader-chapter"] != "1" and r.headers["x-reader-page"].startswith("1/")
-    r = client.get(page_url(book_id, "2-0-1-0-1-0"))
+    r = client.get(page_url(book_id, "2-0-1-0-0-28-0-0-0"))
     assert r.headers["x-reader-font"] == "28"
 
 

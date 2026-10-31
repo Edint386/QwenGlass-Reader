@@ -2,8 +2,8 @@
 
 只管“打开哪本、跳到哪”这类偶发操作；翻页在眼镜页面里完成，不经过大模型（research §0 第 1 条）。
 
-- ``open_book`` / ``jump`` 返回页面要的两个字段 ``u``（页图地址前缀，带新会话号）和 ``t``（书名），
-  由大模型照抄进 ``UI页面渲染(templateName="reader", dataSource={"u", "t"})``（skill/SKILL.md）。
+- ``open_book`` / ``jump`` 返回页面要的三个字段 ``u``（页图地址前缀，带新会话号）、``t``（书名）和
+  ``s``（当前显示设置），由大模型照抄进 ``UI页面渲染(templateName="reader", dataSource={"u", "t", "s"})``（skill/SKILL.md）。
   每次都换新会话号：内核按完整 URL 缓存页图，电脑端按会话记计数基线（research §4.2）。
 - 平台把 MCP 出参只当 ``content[0].text`` 交给模型（glasscast research §9.5），所以返回体是扁平的 JSON 对象；
   ``message`` 是可以直接念给用户的一句中文，技术细节放 ``error``。
@@ -47,7 +47,7 @@ MAX_LIST = 20
 
 SERVER_INSTRUCTIONS = (
     "在千问 AI 眼镜上看电脑里的 TXT 小说。open_book / jump 成功后，必须用平台的 UI 页面渲染工具打开页面："
-    'templateName="reader"，dataSource={"u": 返回的 u, "t": 返回的 t}，两个字段原样照抄。'
+    'templateName="reader"，dataSource={"u": 返回的 u, "t": 返回的 t, "s": 返回的 s}，三个字段原样照抄。'
     "翻页、开菜单都在眼镜上用镜腿完成，不要为了翻页调用工具。"
 )
 
@@ -81,6 +81,8 @@ class BookResult(TypedDict, total=False):
     u: str
     #: 页面 dataSource 的 t：书名
     t: str
+    #: 页面 dataSource 的 s：当前显示设置（设置面板显示这些值，亮度由它决定）。原样照抄
+    s: dict[str, int]
     title: str
     chapter: str
     #: 当前章节是第几个章节（1 起，含前言 / 序章）
@@ -162,6 +164,7 @@ class ReaderTools:
             "message": message,
             "u": self.settings.page_prefix(book.id, new_session_id()),
             "t": book.title,
+            "s": self.library.page_settings(book),
             "title": book.title,
             "chapter": book.chapters[v.chapter].title,
             "chapter_index": v.chapter + 1,
@@ -289,14 +292,14 @@ LIST_BOOKS_DESCRIPTION = (
 OPEN_BOOK_DESCRIPTION = (
     "打开一本小说，从上次读到的地方继续。用户说“看小说”“继续看”“接着读”“打开《某书》”“换一本看《某书》”时调用。"
     "title 是书名或书名片段，不说书名（继续看）时留空，打开最近读的那本。"
-    '成功后必须用 UI 页面渲染工具打开页面：templateName="reader"，dataSource={"u": 返回的 u, "t": 返回的 t}。'
+    '成功后必须用 UI 页面渲染工具打开页面：templateName="reader"，dataSource={"u": 返回的 u, "t": 返回的 t, "s": 返回的 s}。'
 )
 JUMP_DESCRIPTION = (
     "跳到某一章、某个百分比，或往前 / 往后翻几页。用户说“跳到第三章”“看下一章”“回到上一章”“从夜渡那章开始”"
     "“跳到一半”“回到开头”“往后翻五页”时调用。title 留空 = 当前在读的书。"
     "chapter：章节号或标题片段，如“第三章”“3”“夜渡”，也可以是“下一章”“上一章”；"
     "percent：0～100（“开头”= 0，“一半”= 50）；pages：往后翻为正、往前翻为负。三者给一个。"
-    '成功后同样要用 UI 页面渲染工具重新打开页面：templateName="reader"，dataSource={"u": 返回的 u, "t": 返回的 t}。'
+    '成功后同样要用 UI 页面渲染工具重新打开页面：templateName="reader"，dataSource={"u": 返回的 u, "t": 返回的 t, "s": 返回的 s}。'
 )
 READING_STATUS_DESCRIPTION = (
     "查询读到哪里了：书名、章节、全书百分比、最后阅读时间。用户问“我看到哪了”“这本书读了多少”“上次读到哪”时调用。"

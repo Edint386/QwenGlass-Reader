@@ -1,77 +1,174 @@
 <view xmlns:a="waft://dsl" width="100%" height="100%" flex-flow="row" flex-cross="start" column-gap="0" bg-color="#000000">
-  <!-- 小说阅读页（原型，reader/docs/research.md §4）。dataSource：{"u": "<服务地址>/r/<key>/<书>/<会话>", "t": "书名"}，由 open_book / jump 返回
-       正文是电脑端渲染好的页图；两侧栏和菜单是原生控件，按键立即响应。
-       计数器只增不减（a 下一页 b 上一页 j 下一章 k 上一章 f 字号加 g 字号减），电脑端按差值移动阅读位置。
-       m：0 = 阅读，1～5 = 菜单打开且选中第 m 项。
-       每次 data:// 只写一个键：模拟器内核不解码 &amp;，多键更新只生效第一个（glasscast research §9.2 E4）。
-       条件里不用小于号和 and 号：属性里的实体内核不解码，裸写又不是良构 XML。 -->
+  <!-- 小说阅读页（原型，reader/docs/research.md §4）。dataSource：{"u": "<服务地址>/r/<key>/<书>/<会话>", "t": "书名", "s": 显示设置}，由 open_book / jump 返回
+       正文和左栏书名是电脑端渲染好的图；其余侧栏和菜单是原生控件，按键立即响应。
+       计数器只增不减（a 下一页 b 上一页 j 下一章 k 上一章 z 自动翻页），电脑端按差值移动阅读位置。
+       m：0 = 阅读，1～5 = 主菜单选中第 m 项，11～15 = 显示设置菜单选中第 m - 10 项，21～24 = 调字号、粗细、亮度、行距，25 = 自动翻页设置。
+       fv wv bv sv：设置面板上的字号、粗细、亮度、行距，op：亮度遮罩的透明度；
+       uf uw ub us：写进图片地址告诉电脑端，0 = 这次打开还没改过。字号、粗细、行距要换页图，每滑一下就写；亮度只看遮罩，单击保存时才写。
+       s：自动翻页设置里的秒数，0 = 关闭；p：生效的秒数，0 = 自动翻页关闭；c：这一页还剩几秒；r：计时循环在跑。
+       一次 data:// 写多个键用 &amp; 分隔，按键和事件的动作都能写全（内核 v0.2.11、官方预览实测）。
+       按键链按状态分支，一个元素管三个键；链是按键分开算的，缺了哪个键就落到下一支，所以每支都写全。菜单首尾相接。
+       条件里不用小于号和 and 号：写成实体只算第一个比较，裸写又不是良构 XML。 -->
   <page-meta theme="no-status-bar|disable-chat-bar" screen-awake="keep" />
-  <data a="0" b="0" j="0" k="0" f="0" g="0" m="0" net="1" bt="1" />
+  <data a="0" b="0" j="0" k="0" z="0" fv="24" wv="3" bv="100" sv="140" op="0" uf="0" uw="0" ub="0" us="0" m="0" s="7" p="0" c="0" r="0" net="1" bt="1" />
   <connection-event on-net-connected="data://update?net=1" on-net-disconnected="data://update?net=0"
                     on-gma-connected="data://update?bt=1" on-gma-disconnected="data://update?bt=0" />
 
-  <!-- 单击：先执行菜单动作，再开关菜单（同一事件里后面的条件读到前面刚写入的值） -->
-  <key-event a:if="{{d:m == 2}}" on-key-enter="data://update?j={{d:j + 1}}" />
-  <key-event a:elif="{{d:m == 3}}" on-key-enter="data://update?k={{d:k + 1}}" />
-  <key-event a:elif="{{d:m == 4}}" on-key-enter="data://update?f={{d:f + 1}}" />
-  <key-event a:elif="{{d:m == 5}}" on-key-enter="data://update?g={{d:g + 1}}" />
-  <key-event a:if="{{d:m == 0}}" on-key-enter="data://update?m=1" />
-  <key-event a:elif="{{d:m == 1 || d:m == 2 || d:m == 3}}" on-key-enter="data://update?m=0" />
-  <!-- 前后滑：阅读时翻页，菜单里移动选中项（字号两项不关菜单，可连按）。
-       表达式只写“变量 运算符 常量”：模拟器内核只算第一个运算符，常量在左时算术结果为 0（docs/img/probe-arith.png） -->
-  <key-event a:if="{{d:m == 0}}" on-key-next="data://update?a={{d:a + 1}}" />
-  <key-event a:elif="{{d:m != 5}}" on-key-next="data://update?m={{d:m + 1}}" />
-  <key-event a:if="{{d:m == 0}}" on-key-prev="data://update?b={{d:b + 1}}" />
-  <key-event a:elif="{{d:m > 1}}" on-key-prev="data://update?m={{d:m - 1}}" />
+  <key-event a:if="{{d:m == 0}}" on-key-enter="data://update?m=1" on-key-next="data://update?c={{d:p}}&amp;a={{d:a + 1}}" on-key-prev="data://update?c={{d:p}}&amp;b={{d:b + 1}}" />
+  <key-event a:elif="{{d:m == 25}}" on-key-enter="emit://event/start?" on-key-next="emit://event/up25?" on-key-prev="emit://event/down25?" />
+  <key-event a:elif="{{d:m == 23}}" on-key-enter="data://update?ub={{d:bv}}&amp;m=13" on-key-next="emit://event/up23?" on-key-prev="emit://event/down23?" />
+  <key-event a:elif="{{d:m > 20}}" on-key-enter="data://update?m={{d:m - 10}}" on-key-next="emit://event/up{{d:m}}?" on-key-prev="emit://event/down{{d:m}}?" />
+  <key-event a:elif="{{d:m == 15}}" on-key-enter="data://update?m=5" on-key-next="data://update?m=11" on-key-prev="data://update?m=14" />
+  <key-event a:elif="{{d:m == 11}}" on-key-enter="data://update?m=21" on-key-next="data://update?m=12" on-key-prev="data://update?m=15" />
+  <key-event a:elif="{{d:m > 10}}" on-key-enter="data://update?m={{d:m + 10}}" on-key-next="data://update?m={{d:m + 1}}" on-key-prev="data://update?m={{d:m - 1}}" />
+  <key-event a:elif="{{d:m == 1}}" on-key-enter="data://update?c={{d:p}}&amp;m=0" on-key-next="data://update?m=2" on-key-prev="data://update?m=5" />
+  <key-event a:elif="{{d:m == 2}}" on-key-enter="emit://event/auto?" on-key-next="data://update?m=3" on-key-prev="data://update?m=1" />
+  <key-event a:elif="{{d:m == 3}}" on-key-enter="data://update?j={{d:j + 1}}&amp;c={{d:p}}&amp;m=0" on-key-next="data://update?m=4" on-key-prev="data://update?m=2" />
+  <key-event a:elif="{{d:m == 4}}" on-key-enter="data://update?k={{d:k + 1}}&amp;c={{d:p}}&amp;m=0" on-key-next="data://update?m=5" on-key-prev="data://update?m=3" />
+  <key-event a:else="" on-key-enter="data://update?m=11" on-key-next="data://update?m=1" on-key-prev="data://update?m=4" />
+  <event match="event://up21?" a:if="{{d:fv != 32}}" action="data://update?fv={{d:fv + 2}}&amp;uf={{d:fv + 2}}" />
+  <event match="event://down21?" a:if="{{d:fv != 16}}" action="data://update?fv={{d:fv - 2}}&amp;uf={{d:fv - 2}}" />
+  <event match="event://up22?" a:if="{{d:wv != 6}}" action="data://update?wv={{d:wv + 1}}&amp;uw={{d:wv + 1}}" />
+  <event match="event://down22?" a:if="{{d:wv != 1}}" action="data://update?wv={{d:wv - 1}}&amp;uw={{d:wv - 1}}" />
+  <event match="event://up23?" a:if="{{d:bv != 100}}" action="data://update?op={{d:op - 25}}&amp;bv={{d:bv + 10}}" />
+  <event match="event://down23?" a:if="{{d:bv != 10}}" action="data://update?op={{d:op + 25}}&amp;bv={{d:bv - 10}}" />
+  <event match="event://up24?" a:if="{{d:sv != 185}}" action="data://update?sv={{d:sv + 15}}&amp;us={{d:sv + 15}}" />
+  <event match="event://down24?" a:if="{{d:sv != 125}}" action="data://update?sv={{d:sv - 15}}&amp;us={{d:sv - 15}}" />
+  <event match="event://up25?" a:if="{{d:s != 30}}" action="data://update?s={{d:s + 1}}" />
+  <event match="event://down25?" a:if="{{d:s != 0}}" action="data://update?s={{d:s - 1}}" />
+  <event match="event://auto?" a:if="{{d:p > 0}}" action="data://update?p=0&amp;m=0" />
+  <event match="event://auto?" a:else="" action="data://update?m=25" />
+  <event match="event://init?" a:if="{{s.f > 0}}" action="data://update?fv={{s.f}}&amp;wv={{s.w}}&amp;bv={{s.b}}&amp;sv={{s.l}}&amp;op={{s.o}}" />
+  <event match="event://start?" action="data://update?p={{d:s}}&amp;c={{d:s}}&amp;m=0" />
+  <event match="event://start?" a:if="{{d:s == 0}}" action="data://update?s=7" />
+  <event match="event://start?" a:if="{{d:r == 0}}" action="emit://event/d183?n=183" />
+  <event match="event://start?" a:if="{{d:r == 0}}" action="data://update?r=1" />
+  <event match="event://d1" action="emit://event/d{{e:n - 1}}?n={{e:n - 1}}" />
+  <event match="event://d9" a:if="{{d:p == 0}}" action="data://update?r=0" />
+  <event match="event://d9" a:elif="{{d:m == 0}}" action="emit://event/second?" />
+  <event match="event://d9" a:if="{{d:p > 0}}" action="emit://event/d183?n=183" />
+  <event match="event://second?" a:if="{{d:c > 1}}" action="data://update?c={{d:c - 1}}" />
+  <event match="event://second?" a:else="" action="emit://event/turn?" />
+  <event match="event://turn?" action="data://update?c={{d:p}}&amp;z={{d:z + 1}}" />
+  <!-- 看不见的时候不翻：页面被遮挡、灭屏、摘下眼镜都关掉自动翻页 -->
+  <lifecycle-event on-load="emit://event/init?" on-hide="data://update?p=0" on-screen-off="data://update?p=0" />
+  <wear-event on-wear-off="data://update?p=0" />
 
-  <!-- 左栏：书名竖排 + 时间 + 连接状态 -->
-  <view width="80" height="290" flex-flow="column" flex-cross="center" padding-top="16" row-gap="10">
-    <label text="{{t}}" width="26" height="176" font-size="24" color="#FFFFFF" long-mode="wrap" text-align="center" />
-    <view width="36" height="1" bg-color="#3A3A3A" />
-    <!-- 时间随每次翻页的绑定刷新更新；不用 tick：真机上图片没加载完时，每次刷新都会让它重新加载 -->
-    <label text="{{f:formatDate('now', 'HH:mm')}}" width="72" height="24" font-size="20" color="#8A8A8A" text-align="center" />
-    <label a:if="{{d:net == 0}}" text="手机断网" width="72" height="20" font-size="16" color="#FFFFFF" text-align="center" />
-    <label a:elif="{{d:bt == 0}}" text="蓝牙断开" width="72" height="20" font-size="16" color="#FFFFFF" text-align="center" />
-  </view>
-  <view width="1" height="250" margin-top="20" bg-color="#2A2A2A" />
+  <!-- 可见元素都放在这一层里：根节点直接子元素最多 64 个，事件已经占了大半 -->
+  <view width="100%" height="100%" flex-flow="row" flex-cross="start" column-gap="0">
+    <!-- 左栏：书名 + 时间 + 连接状态。书名是服务端排好的图：长书名要缩小排两列，原生控件算不出字数 -->
+    <view width="80" height="290" flex-flow="column" flex-cross="center" padding-top="16" row-gap="10">
+      <image src="{{u}}/title.png" width="72" height="176" />
+      <view width="36" height="1" bg-color="#3A3A3A" />
+      <!-- 时间随每次绑定刷新更新；不用 tick：真机上图片没加载完时，每次刷新都会让它重新加载，
+           所以关闭自动翻页时页面完全不刷新 -->
+      <label text="{{f:formatDate('now', 'HH:mm')}}" width="72" height="24" font-size="20" color="#8A8A8A" text-align="center" />
+      <label a:if="{{d:net == 0}}" text="手机断网" width="72" height="20" font-size="16" color="#FFFFFF" text-align="center" />
+      <label a:elif="{{d:bt == 0}}" text="蓝牙断开" width="72" height="20" font-size="16" color="#FFFFFF" text-align="center" />
+      <!-- 原生字号只有固定档位，15 会退回 14；14 号时“30 秒后翻页”约 75 px，所以宽度用满侧栏。
+           “已暂停”不用一个 label 换行：两行的行距超过 40 px，第二行会被裁掉 -->
+      <view a:elif="{{d:p > 0}}" width="80" height="40" flex-flow="column" flex-cross="center" row-gap="0">
+        <label a:if="{{d:m > 0}}" text="自动翻页" width="72" height="20" font-size="16" color="#D0D0D0" text-align="center" />
+        <label a:if="{{d:m > 0}}" text="已暂停" width="72" height="20" font-size="16" color="#D0D0D0" text-align="center" />
+        <label a:if="{{d:m == 0}}" text="{{d:c}} 秒后翻页" width="80" height="20" font-size="14" color="#D0D0D0" text-align="center" />
+      </view>
+    </view>
+    <view width="1" height="250" margin-top="20" bg-color="#2A2A2A" />
 
-  <!-- 正文页图：480×290，已含章节名、百分比、页码和进度条 -->
-  <image src="{{u}}/{{d:a}}-{{d:b}}-{{d:j}}-{{d:k}}-{{d:f}}-{{d:g}}.png" width="478" height="290" />
+    <!-- 正文页图：480×290，已含章节名、百分比、页码和进度条 -->
+    <image src="{{u}}/{{d:a}}-{{d:b}}-{{d:j}}-{{d:k}}-{{d:z}}-{{d:uf}}-{{d:uw}}-{{d:ub}}-{{d:us}}.png" width="478" height="290" />
 
-  <view width="1" height="250" margin-top="20" bg-color="#2A2A2A" />
-  <!-- 右栏：操作提示（阅读）/ 菜单操作提示（菜单） -->
-  <view a:if="{{d:m == 0}}" width="80" height="290" flex-flow="column" flex-cross="center" padding-top="26" row-gap="6">
-    <label text="前滑" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" />
-    <label text="下一页" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
-    <label text="后滑" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" margin-top="8" />
-    <label text="上一页" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
-    <label text="单击" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" margin-top="8" />
-    <label text="菜单" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
-    <label text="双击" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" margin-top="8" />
-    <label text="退出" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
-  </view>
-  <view a:else="" width="80" height="290" flex-flow="column" flex-cross="center" padding-top="96" row-gap="6">
-    <label text="滑动" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" />
-    <label text="选择" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
-    <label text="单击" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" margin-top="8" />
-    <label text="确定" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
-  </view>
+    <view width="1" height="250" margin-top="20" bg-color="#2A2A2A" />
+    <!-- 右栏：操作提示（阅读）/ 菜单操作提示（菜单） -->
+    <view a:if="{{d:m == 0}}" width="80" height="290" flex-flow="column" flex-cross="center" padding-top="26" row-gap="6">
+      <label text="前滑" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" />
+      <label text="下一页" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
+      <label text="后滑" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" margin-top="8" />
+      <label text="上一页" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
+      <label text="单击" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" margin-top="8" />
+      <label text="菜单" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
+      <label text="双击" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" margin-top="8" />
+      <label text="退出" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
+    </view>
+    <view a:elif="{{d:m == 25}}" width="80" height="290" flex-flow="column" flex-cross="center" padding-top="66" row-gap="6">
+      <label text="前滑" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" />
+      <label text="加 1 秒" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
+      <label text="后滑" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" margin-top="8" />
+      <label text="减 1 秒" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
+      <label text="单击" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" margin-top="8" />
+      <label text="确定" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
+    </view>
+    <!-- 调显示设置：只占右栏，正文露在外面，滑动时页图跟着换，亮度遮罩立刻变 -->
+    <view a:elif="{{d:m > 20}}" width="80" height="290" flex-flow="column" flex-cross="center" padding-top="72" row-gap="0">
+      <label a:if="{{d:m == 21}}" text="字号" width="72" height="30" font-size="24" color="#D0D0D0" text-align="center" />
+      <label a:elif="{{d:m == 22}}" text="粗细" width="72" height="30" font-size="24" color="#D0D0D0" text-align="center" />
+      <label a:elif="{{d:m == 23}}" text="亮度" width="72" height="30" font-size="24" color="#D0D0D0" text-align="center" />
+      <label a:else="" text="行距" width="72" height="30" font-size="24" color="#D0D0D0" text-align="center" />
+      <label a:if="{{d:m == 21}}" text="{{d:fv}}" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
+      <label a:elif="{{d:m == 22}}" text="{{d:wv}}/6" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
+      <label a:elif="{{d:m == 23}}" text="{{d:bv}}%" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
+      <label a:else="" text="{{d:sv}}%" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
+      <label text="单击保存" width="72" height="24" margin-top="14" font-size="16" color="#A0A0A0" text-align="center" />
+    </view>
+    <view a:else="" width="80" height="290" flex-flow="column" flex-cross="center" padding-top="96" row-gap="6">
+      <label text="滑动" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" />
+      <label text="选择" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
+      <label text="单击" width="72" height="20" font-size="16" color="#6A6A6A" text-align="center" margin-top="8" />
+      <label text="确定" width="72" height="24" font-size="20" color="#D0D0D0" text-align="center" />
+    </view>
 
-  <!-- 菜单：盖在正文中间；高亮框随 m 移动 -->
-  <view a:if="{{d:m > 0}}" floating="true" left="186" top="44" width="268" height="202"
-        bg-color="#000000" bg-opa="255" border-width="2" border-color="#5A5A5A" radius="10"
-        flex-flow="column" flex-cross="center" row-gap="0" padding-top="9">
-    <!-- 高亮框：五个固定位置按 m 显示其一。不用 top="{{d:m * 36 - 36}}"：模拟器里只算第一个运算符（得 m*36）。
-         floating 子元素的 left/top 从父容器内边距以内算起。 -->
-    <view a:if="{{d:m == 1}}" floating="true" left="14" top="0" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
-    <view a:if="{{d:m == 2}}" floating="true" left="14" top="36" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
-    <view a:if="{{d:m == 3}}" floating="true" left="14" top="72" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
-    <view a:if="{{d:m == 4}}" floating="true" left="14" top="108" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
-    <view a:if="{{d:m == 5}}" floating="true" left="14" top="144" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
-    <label text="返回阅读" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
-    <label text="下一章" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
-    <label text="上一章" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
-    <label text="字号放大" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
-    <label text="字号缩小" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+    <!-- 自动翻页设置：大字显示秒数 -->
+    <view a:if="{{d:m == 25}}" floating="true" left="186" top="44" width="268" height="202"
+          bg-color="#000000" bg-opa="255" border-width="2" border-color="#5A5A5A" radius="10"
+          flex-flow="column" flex-cross="center" row-gap="0" padding-top="18">
+      <label text="自动翻页" width="236" height="32" font-size="22" color="#A0A0A0" text-align="center" />
+      <view a:if="{{d:s != 0}}" width="236" height="84" margin-top="8" flex-flow="row" flex-align="center" flex-cross="end" column-gap="8">
+        <label text="{{d:s}}" height="72" font-size="58" font-weight="bold" color="#FFFFFF" />
+        <label text="秒" height="40" font-size="24" color="#D0D0D0" />
+      </view>
+      <label a:else="" text="关闭" width="236" height="84" margin-top="8" font-size="44" font-weight="bold" color="#FFFFFF" text-align="center" />
+      <label a:if="{{d:s != 0}}" text="每页停留时间" width="236" height="28" margin-top="10" font-size="20" color="#8A8A8A" text-align="center" />
+      <label a:else="" text="单击返回阅读" width="236" height="28" margin-top="10" font-size="20" color="#8A8A8A" text-align="center" />
+    </view>
+    <!-- 占位：调显示设置时不盖住正文，也不能落到下面的菜单分支 -->
+    <view a:elif="{{d:m > 20}}" floating="true" left="0" top="0" width="1" height="1" />
+
+    <!-- 显示设置菜单：每项后面是当前值；调好保存后回到这里，方便接着调别的 -->
+    <view a:elif="{{d:m > 10}}" floating="true" left="186" top="44" width="268" height="202"
+          bg-color="#000000" bg-opa="255" border-width="2" border-color="#5A5A5A" radius="10"
+          flex-flow="column" flex-cross="center" row-gap="0" padding-top="9">
+      <view a:if="{{d:m == 11}}" floating="true" left="14" top="0" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 12}}" floating="true" left="14" top="36" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 13}}" floating="true" left="14" top="72" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 14}}" floating="true" left="14" top="108" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 15}}" floating="true" left="14" top="144" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <label text="字号  {{d:fv}}" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="粗细  {{d:wv}}/6" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="亮度  {{d:bv}}%" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="行距  {{d:sv}}%" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="返回" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+    </view>
+
+    <!-- 主菜单：盖在正文中间；高亮框随 m 移动 -->
+    <view a:elif="{{d:m > 0}}" floating="true" left="186" top="44" width="268" height="202"
+          bg-color="#000000" bg-opa="255" border-width="2" border-color="#5A5A5A" radius="10"
+          flex-flow="column" flex-cross="center" row-gap="0" padding-top="9">
+      <!-- 高亮框：五个固定位置按 m 显示其一。不用 top="{{d:m * 36 - 36}}"：模拟器里只算第一个运算符（得 m*36）。
+           floating 子元素的 left/top 从父容器内边距以内算起。 -->
+      <view a:if="{{d:m == 1}}" floating="true" left="14" top="0" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 2}}" floating="true" left="14" top="36" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 3}}" floating="true" left="14" top="72" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 4}}" floating="true" left="14" top="108" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 5}}" floating="true" left="14" top="144" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <label text="返回阅读" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label a:if="{{d:p > 0}}" text="停止自动翻页" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label a:else="" text="自动翻页" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="下一章" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="上一章" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="显示设置" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+    </view>
+
+    <!-- 亮度：整屏盖一层半透明黑色放在最上面，正文、书名、操作栏、时间和菜单一起变暗，改亮度不用换页图。必须是最后一个子元素 -->
+    <view floating="true" left="0" top="0" width="640" height="290" bg-color="#000000" bg-opa="{{d:op}}" />
   </view>
 </view>

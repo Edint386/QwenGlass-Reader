@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly QwenGlass-Reader TLS certificate renewal check
+
+[Timer]
+OnCalendar=Sun *-*-* 03:47:00
+RandomizedDelaySec=6h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

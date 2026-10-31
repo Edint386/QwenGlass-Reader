@@ -1,0 +1,43 @@
+# glassreader 云端运行（deploy/cloud/README.md）。放在服务器 /opt/glassreader/。
+# 只监听回环：公网入口是 OpenResty 的 reader.example.com 站点（site.https.conf）。
+name: glassreader
+
+services:
+  reader:
+    build:
+      context: ./app
+    image: glassreader:local
+    container_name: glassreader
+    env_file:
+      - ./.env
+    environment:
+      READER_HOST: 0.0.0.0
+      READER_PORT: "8780"
+      READER_BOOKS_DIR: /books
+      READER_STATE_FILE: /data/progress.json
+      TZ: UTC
+    ports:
+      - 127.0.0.1:19516:8780
+    volumes:
+      - ./books:/books:ro
+      - ./data:/data
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    pids_limit: 100
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8780/healthz', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

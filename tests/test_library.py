@@ -4,19 +4,21 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from glassreader import library as library_mod
 from glassreader.book import book_id_for
-from glassreader.library import Library, View, new_session_id, normalize_title, parse_counters
-from glassreader.pager import FONT_SIZES
+from glassreader.library import BRIGHTNESS_LEVELS, Display, Library, View, new_session_id, normalize_title, parse_counters
+from glassreader.pager import DEFAULT_SPACING, DEFAULT_WEIGHT, FONT_SIZES, LINE_SPACINGS, WEIGHTS
 
 from .conftest import make_novel
 
-ZERO = (0, 0, 0, 0, 0, 0)
+ZERO = (0,) * 9
 
 
 def novel(lib: Library):
@@ -29,8 +31,11 @@ def where(v: View) -> tuple[int, int]:
 
 @pytest.mark.parametrize(
     ("raw", "counters"),
-    [("0-0-0-0-0-0", ZERO), ("3-1-2-0-1-0", (3, 1, 2, 0, 1, 0)), ("5", (5, 0, 0, 0, 0, 0)),
-     ("1-x-2", (1, 0, 2, 0, 0, 0)), ("1-2-3-4-5-6-7", (1, 2, 3, 4, 5, 6)), ("9999999999", ZERO)],
+    [("1-2-3-4-5-20-3-60-155", (1, 2, 3, 4, 5, 20, 3, 60, 155)), ("1-x-3-4-5-0-0-0-0", (1, 0, 3, 4, 5, 0, 0, 0, 0)),
+     # 还开着的旧页面：a-b-j-k-f-g-z…，后面的计数不能当成设置值
+     ("3-1-2-0-1-0", (3, 1, 2, 0, 0, 0, 0, 0, 0)), ("3-1-2-0-1-0-6", (3, 1, 2, 0, 6, 0, 0, 0, 0)),
+     ("3-1-2-0-1-0-6-" + "9-9-9-9-9-9", (3, 1, 2, 0, 6, 0, 0, 0, 0)), ("5", (5, 0, 0, 0, 0, 0, 0, 0, 0)),
+     ("9999999999", ZERO)],
 )
 def test_parse_counters(raw: str, counters: tuple[int, ...]) -> None:
     assert parse_counters(raw) == counters
@@ -92,8 +97,8 @@ def test_turn_baseline_repeat_and_delta(library: Library) -> None:
     assert note == "baseline" and where(v) == (0, 0)
     v, note = library.turn(book, "s1", ZERO)
     assert note == "repeat"
-    v1, _ = library.turn(book, "s1", (1, 0, 0, 0, 0, 0))
-    v2, note = library.turn(book, "s1", (1, 0, 0, 0, 0, 0))  # 内核重复请求同一地址
+    v1, _ = library.turn(book, "s1", (1, 0, 0, 0, 0, 0, 0, 0, 0))
+    v2, note = library.turn(book, "s1", (1, 0, 0, 0, 0, 0, 0, 0, 0))  # 内核重复请求同一地址
     assert note == "repeat" and where(v2) == where(v1)
     assert library.progress[book.id]["offset"] == v1.offset
 
@@ -101,7 +106,7 @@ def test_turn_baseline_repeat_and_delta(library: Library) -> None:
 def test_turn_lost_request_is_counted(library: Library) -> None:
     book = novel(library)
     library.turn(book, "s", ZERO)
-    v, _ = library.turn(book, "s", (3, 0, 0, 0, 0, 0))  # 1、2 两个地址没发出来
+    v, _ = library.turn(book, "s", (3, 0, 0, 0, 0, 0, 0, 0, 0))  # 1、2 两个地址没发出来
     expected = library.move_pages(library.view(book, 0), 3)
     assert where(v) == where(expected)
 
@@ -109,19 +114,19 @@ def test_turn_lost_request_is_counted(library: Library) -> None:
 def test_turn_stale_request_does_not_go_back(library: Library) -> None:
     book = novel(library)
     library.turn(book, "s", ZERO)
-    v4, _ = library.turn(book, "s", (4, 0, 0, 0, 0, 0))
-    v, note = library.turn(book, "s", (2, 0, 0, 0, 0, 0))  # 晚到的旧地址
+    v4, _ = library.turn(book, "s", (4, 0, 0, 0, 0, 0, 0, 0, 0))
+    v, note = library.turn(book, "s", (2, 0, 0, 0, 0, 0, 0, 0, 0))  # 晚到的旧地址
     assert note == "repeat" and where(v) == where(v4)
 
 
 def test_new_session_baseline_keeps_position(library: Library) -> None:
     book = novel(library)
     library.turn(book, "s1", ZERO)
-    v, _ = library.turn(book, "s1", (5, 1, 0, 0, 0, 0))
+    v, _ = library.turn(book, "s1", (5, 1, 0, 0, 0, 0, 0, 0, 0))
     # 页面经 on-new-intent 换了新会话，计数器没归零：只记基线，不能当成 5 次翻页
-    v2, note = library.turn(book, "s2", (5, 1, 0, 0, 0, 0))
+    v2, note = library.turn(book, "s2", (5, 1, 0, 0, 0, 0, 0, 0, 0))
     assert note == "baseline" and where(v2) == where(v)
-    v3, _ = library.turn(book, "s2", (6, 1, 0, 0, 0, 0))
+    v3, _ = library.turn(book, "s2", (6, 1, 0, 0, 0, 0, 0, 0, 0))
     assert where(v3) == where(library.move_pages(v, 1))
 
 
@@ -129,7 +134,7 @@ def test_sessions_are_per_book(library: Library) -> None:
     a = novel(library)
     b = library.book(library.find("雾港来信")[0].id)
     library.turn(a, "s", ZERO)
-    v, note = library.turn(b, "s", (2, 0, 0, 0, 0, 0))
+    v, note = library.turn(b, "s", (2, 0, 0, 0, 0, 0, 0, 0, 0))
     assert note == "baseline" and v.book is b
 
 
@@ -189,10 +194,57 @@ def test_resize_keeps_text_position(library: Library) -> None:
     assert library.resize(v, -9).font_size == FONT_SIZES[0]
 
 
+def test_auto_turn_moves_one_page(library: Library) -> None:
+    book = novel(library)
+    start, _ = library.turn(book, "s", ZERO)
+    v, note = library.turn(book, "s", (0, 0, 0, 0, 1, 0, 0, 0, 0))
+    assert note.startswith("+1") and v.offset > start.offset
+
+
+def test_auto_turn_backlog_counts_as_one_page(library: Library) -> None:
+    book = novel(library)
+    start, _ = library.turn(book, "s", ZERO)
+    v, _ = library.turn(book, "s", (0, 0, 0, 0, 5, 0, 0, 0, 0))  # 断线时走过的几圈
+    assert where(v) == where(library.move_pages(start, 1))
+
+
+def test_next_right_after_auto_turn_is_the_same_turn(library: Library, monkeypatch: pytest.MonkeyPatch) -> None:
+    book = novel(library)
+    clock = [100.0]
+    monkeypatch.setattr(library_mod.time, "monotonic", lambda: clock[0])
+    library.turn(book, "s", ZERO)
+    auto, _ = library.turn(book, "s", (0, 0, 0, 0, 1, 0, 0, 0, 0))
+    clock[0] += 0.5
+    merged, _ = library.turn(book, "s", (1, 0, 0, 0, 1, 0, 0, 0, 0))  # 新图还没显示就滑了一下
+    assert where(merged) == where(auto)
+    clock[0] += library_mod.TURN_MERGE_SECONDS
+    moved, _ = library.turn(book, "s", (2, 0, 0, 0, 1, 0, 0, 0, 0))
+    assert moved.offset > auto.offset
+
+
+def test_auto_turn_right_after_next_is_the_same_turn(library: Library, monkeypatch: pytest.MonkeyPatch) -> None:
+    book = novel(library)
+    clock = [100.0]
+    monkeypatch.setattr(library_mod.time, "monotonic", lambda: clock[0])
+    library.turn(book, "s", ZERO)
+    manual, _ = library.turn(book, "s", (1, 0, 0, 0, 0, 0, 0, 0, 0))
+    clock[0] += 0.5
+    merged, note = library.turn(book, "s", (1, 0, 0, 0, 1, 0, 0, 0, 0))
+    assert note == "merged" and where(merged) == where(manual)
+
+
+def test_quick_manual_turns_are_not_merged(library: Library) -> None:
+    book = novel(library)
+    start, _ = library.turn(book, "s", ZERO)
+    library.turn(book, "s", (1, 0, 0, 0, 0, 0, 0, 0, 0))
+    v, _ = library.turn(book, "s", (2, 0, 0, 0, 0, 0, 0, 0, 0))
+    assert where(v) == where(library.move_pages(library.move_pages(start, 1), 1))
+
+
 def test_turn_applies_font_then_chapter_then_pages(library: Library) -> None:
     book = novel(library)
     library.turn(book, "s", ZERO)
-    v, _ = library.turn(book, "s", (1, 0, 2, 0, 1, 0))
+    v, _ = library.turn(book, "s", (1, 0, 2, 0, 0, 28, 0, 0, 0))
     assert v.font_size == 28
     assert where(v) == (2, 1)  # 跳两章到第二章，再翻一页
 
@@ -201,7 +253,7 @@ def test_swap_swipe(books_dir: Path, state_file: Path) -> None:
     lib = Library(books_dir, state_file, swap_swipe=True)
     book = lib.book(lib.find("测试长篇")[0].id)
     lib.turn(book, "s", ZERO)
-    v, _ = lib.turn(book, "s", (0, 1, 0, 0, 0, 0))  # “上一页”计数加一，对调后是下一页
+    v, _ = lib.turn(book, "s", (0, 1, 0, 0, 0, 0, 0, 0, 0))  # “上一页”计数加一，对调后是下一页
     assert where(v) == where(lib.move_pages(lib.view(book, 0), 1)) != (0, 0)
 
 
@@ -227,7 +279,7 @@ def test_progress_survives_restart(books_dir: Path, state_file: Path) -> None:
     lib = Library(books_dir, state_file)
     book = novel(lib)
     lib.turn(book, "s", ZERO)
-    v, _ = lib.turn(book, "s", (7, 0, 0, 0, 1, 0))
+    v, _ = lib.turn(book, "s", (7, 0, 0, 0, 0, 28, 0, 0, 0))
     saved = json.loads(state_file.read_text(encoding="utf-8"))[book.id]
     assert saved["offset"] == v.offset and saved["font_size"] == 28 and saved["file"] == "测试长篇.txt"
     assert saved["chapter"] == book.chapters[v.chapter].title and saved["page"] == v.page + 1
@@ -290,3 +342,129 @@ def test_long_book_opens_fast(tmp_path: Path) -> None:
     v = lib.jump(book, percent=60)
     lib.page_image(v)
     assert time.perf_counter() - t0 < 1.5
+
+
+def saved(font: int = 0, weight: int = 0, brightness: int = 0, spacing: int = 0, *, nxt: int = 0) -> tuple[int, ...]:
+    return (nxt, 0, 0, 0, 0, font, weight, brightness, spacing)
+
+
+def test_display_defaults(library: Library) -> None:
+    assert library.display == Display(DEFAULT_WEIGHT, 100, DEFAULT_SPACING)
+
+
+def test_page_settings_are_what_the_page_shows(library: Library) -> None:
+    book = novel(library)
+    assert library.page_settings(book) == {"f": 24, "w": DEFAULT_WEIGHT + 1, "b": 100, "l": DEFAULT_SPACING, "o": 0}
+    library.set_display(Display(0, 10, 125))
+    assert library.page_settings(book) == {"f": 24, "w": 1, "b": 10, "l": 125, "o": 225}
+
+
+@pytest.mark.parametrize("brightness", BRIGHTNESS_LEVELS)
+def test_mask_opacity_moves_25_per_step(library: Library, brightness: int) -> None:
+    library.set_display(Display(brightness=brightness))
+    assert library.page_settings(novel(library))["o"] == (100 - brightness) // 10 * 25  # 页面上每档加减 25
+
+
+def test_saving_each_setting(library: Library) -> None:
+    book = novel(library)
+    library.turn(book, "s", ZERO)
+    v, _ = library.turn(book, "s", saved(font=20))
+    assert v.font_size == 20
+    library.turn(book, "s", saved(font=20, weight=5))
+    assert library.display.weight == 4
+    library.turn(book, "s", saved(font=20, weight=5, brightness=40))
+    assert library.display.brightness == 40
+    library.turn(book, "s", saved(font=20, weight=5, brightness=40, spacing=170))
+    assert library.display == Display(4, 40, 170)
+
+
+def test_saved_value_repeating_in_every_address_is_not_an_action(library: Library) -> None:
+    book = novel(library)
+    start, _ = library.turn(book, "s", ZERO)
+    library.turn(book, "s", saved(weight=5))
+    _, note = library.turn(book, "s", saved(weight=5))
+    assert note == "repeat"
+    v, _ = library.turn(book, "s", saved(weight=5, nxt=1))
+    assert v.offset > start.offset and library.display.weight == 4
+
+
+@pytest.mark.parametrize("bad", [saved(font=17), saved(font=99), saved(weight=7), saved(brightness=55), saved(spacing=142)])
+def test_unknown_saved_values_change_nothing(library: Library, bad: tuple[int, ...]) -> None:
+    book = novel(library)
+    library.turn(book, "s", ZERO)
+    v, _ = library.turn(book, "s", bad)
+    assert library.display == Display() and v.font_size == 24
+
+
+def test_spacing_repaginates_at_the_same_text(library: Library) -> None:
+    book = novel(library)
+    library.turn(book, "s", ZERO)
+    before, _ = library.turn(book, "s", saved(nxt=3))
+    after, _ = library.turn(book, "s", saved(spacing=170, nxt=3))
+    assert library.display.spacing == 170
+    start, end = after.offset, after.pages.pages[after.page].lines[-1].offset
+    assert len(after.pages.pages) > len(before.pages.pages) and start <= before.offset <= end
+
+
+def test_display_is_global_and_survives_restart(library: Library) -> None:
+    library.set_display(Display(3, 40, 155))
+    fresh = Library(library.books_dir, library.state_file)
+    assert fresh.display == library.display
+    assert fresh.recent() is None  # 显示设置不算阅读记录
+
+
+def test_bad_display_values_fall_back(library: Library) -> None:
+    library.set_display(Display(3))
+    data = json.loads(library.state_file.read_text(encoding="utf-8"))
+    data["_display"] = {"weight": 99, "brightness": "x", "spacing": "x"}
+    library.state_file.write_text(json.dumps(data), encoding="utf-8")
+    assert Library(library.books_dir, library.state_file).display == Display()
+
+
+@pytest.mark.parametrize(("old", "new"), [(65, 60), (22, 20), (15, 20), (5, 10)])
+def test_old_brightness_levels_snap_to_tens(library: Library, old: int, new: int) -> None:
+    library.set_display(Display())
+    data = json.loads(library.state_file.read_text(encoding="utf-8"))
+    data["_display"]["brightness"] = old
+    library.state_file.write_text(json.dumps(data), encoding="utf-8")
+    assert Library(library.books_dir, library.state_file).display.brightness == new
+
+
+def test_images_do_not_depend_on_brightness(library: Library) -> None:
+    book = novel(library)
+    v = library.view(book)
+    page, title = library.page_image(v), library.title_image(book)
+    library.set_display(Display(brightness=30))
+    assert library.page_image(v) == page and library.title_image(book) == title  # 亮度由页面上的遮罩决定
+    library.set_display(Display(weight=5, brightness=30))
+    assert library.page_image(v) != page
+
+
+def test_two_instances_share_progress_and_display(books_dir: Path, state_file: Path) -> None:
+    image, text = Library(books_dir, state_file), Library(books_dir, state_file)
+    a, b = (image.book(e.id) for e in image.entries()[:2])
+    assert a is not None and b is not None
+    image.save(image.move_pages(image.view(a), 1))
+    assert text.position(a) == image.position(a)
+    text.save(text.view(b))  # 另一个实例存别的书，不能盖掉刚才那本
+    assert a.id in text.progress and b.id in image.progress
+    assert text.recent() == image.recent()
+    text.set_display(Display(4, 40, 170))
+    assert image.display == Display(4, 40, 170) and image.position(a)[0] > 0
+
+
+def test_concurrent_writers_lose_nothing(books_dir: Path, state_file: Path) -> None:
+    libraries = [Library(books_dir, state_file) for _ in range(2)]
+    books = [libraries[0].book(e.id) for e in libraries[0].entries()[:2]]
+
+    def work(library: Library, book: Any) -> None:
+        for _ in range(30):
+            library.save(library.view(book))
+
+    threads = [threading.Thread(target=work, args=pair) for pair in zip(libraries, books, strict=True)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    saved = json.loads(state_file.read_text(encoding="utf-8"))
+    assert {b.id for b in books} <= set(saved)

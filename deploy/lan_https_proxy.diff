@@ -1,12 +1,12 @@
 --- glasscast/tools/lan_https_proxy.py
 +++ reader/deploy/lan_https_proxy.py
 @@ -1,12 +1,21 @@
- """局域网 HTTPS 转发：让同一 Wi-Fi 里的手机直接从这台 Mac 取图，不绕道新加坡（research.md §9.14）。
+ """局域网 HTTPS 转发：让同一 Wi-Fi 里的手机直接从这台 Mac 取图，不绕道公网服务器（research.md §9.14）。
  
  路由器把 ``cast.example.com`` 解析到本机局域网地址后，手机会用 https 连本机 443 端口。本脚本用和公网相同的
--证书（从新加坡服务器复制来的 Let's Encrypt 证书）在 443 上做 TLS，解密后把字节流原样转给本机
+-证书（从公网服务器复制来的 Let's Encrypt 证书）在 443 上做 TLS，解密后把字节流原样转给本机
 -``glasscast serve``（默认 127.0.0.1:8766）。只用标准库，不改 HTTP 内容。
-+证书（从新加坡服务器复制来的 Let's Encrypt 证书）在 443 上做 TLS，解密后转给本机的服务。只用标准库。
++证书（从公网服务器复制来的 Let's Encrypt 证书）在 443 上做 TLS，解密后转给本机的服务。只用标准库。
  
 +两种模式：
 +
