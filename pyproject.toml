@@ -8,6 +8,7 @@ dependencies = [
     "mcp>=2.3,<3",
     "starlette>=0.40",
     "uvicorn>=0.30",
+    "websockets>=17.4",
 ]
 
 [project.scripts]

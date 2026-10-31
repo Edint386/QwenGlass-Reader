@@ -1,6 +1,6 @@
 # reader：千问 AI 眼镜看 TXT 小说（glassreader）
 
-> **这个仓库有两个分支**，是同一个阅读器的两种接入方式。现在看的是 `main`（页图版）。
+> **这个仓库有两个分支**，是同一个阅读器的两种接入方式。现在看的是 `agent`（Agent 文字版）。
 >
 > | 分支 | 版本 | 接入方式 | 适合 | 限制 |
 > |---|---|---|---|---|
@@ -9,7 +9,7 @@
 >
 > 切换：克隆后运行 `git switch agent` 或 `git switch main`。只要文字版可以直接 `git clone -b agent https://github.com/Edint386/QwenGlass-Reader.git reader`。两个版本可以各跑一个实例，共用书库和进度，换个 Skill 接着读。
 >
-> 文字版的用法、听书和上线步骤在 `agent` 分支的 [docs/agent.md](https://github.com/Edint386/QwenGlass-Reader/blob/agent/docs/agent.md)。
+> 这个分支也带着页图版的代码，下文以页图版为主。文字版的用法、听书和上线步骤见 [docs/agent.md](docs/agent.md)。
 
 电脑端读 TXT、切章分页、把每页渲染成适合绿色光机的图片；眼镜上的 Waft-DSL 页面用镜腿滑动翻页，两侧栏和菜单是原生控件。翻页不经过大模型，页图请求本身就是阅读进度。打开书、换书、跳章、查进度走语音 → 大模型 → MCP 工具。
 
@@ -19,6 +19,7 @@
 |---|---|
 | `glassreader/book.py` | TXT 解码（UTF-8 / GB18030 / BOM）、切章、“第 N 章”查找 |
 | `glassreader/pager.py` | 按章分页（禁则 / 悬挂标点 / 两端对齐）、页图渲染（478×290，4 级灰度 PNG） |
+| `glassreader/agent.py` | Agent 自定义接入的文字传输版（`docs/agent.md`） |
 | `glassreader/library.py` | 书库扫描、阅读位置（字符偏移 + 字号）、按计数差值翻页、跳转、进度文件 |
 | `glassreader/mcp_tools.py` | MCP 工具 `list_books` / `open_book` / `jump` / `reading_status` |
 | `glassreader/server.py` | HTTP：页图 `/r/<key>/<书>/<会话>/<计数>.png`、MCP `/mcp`（Bearer，无状态） |

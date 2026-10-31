@@ -132,6 +132,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         timeout_keep_alive=7200,  # 经 SSH 隧道 + OpenResty keepalive 池时保持热连接（同 glasscast）
         timeout_graceful_shutdown=3,
         lifespan="on",
+        ws_ping_interval=None,  # Agent 连接由平台约 30 秒 Ping 一次，这边不用再发
     )
     server = uvicorn.Server(config)
     try:

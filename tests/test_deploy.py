@@ -17,6 +17,7 @@ import pytest
 
 from glassreader.config import DEFAULT_PORT
 from glassreader.server import MCP_PATH
+from glassreader.agent import AGENT_PATH
 
 ROOT = Path(__file__).resolve().parent.parent
 DEPLOY = ROOT / "deploy"
@@ -140,7 +141,7 @@ def test_cloud_site_matches_compose_and_serves_only_glassreader_paths() -> None:
     host_port, container_port = re.search(r"127\.0\.0\.1:(\d+):(\d+)", compose).groups()
     assert f"server 127.0.0.1:{host_port} " in site
     assert int(container_port) == DEFAULT_PORT
-    assert re.findall(r"location\s+(?:=|\^~)?\s*(\S+)\s*\{", site) == ["/healthz", "/r/", MCP_PATH, "/"]
+    assert re.findall(r"location\s+(?:=|\^~)?\s*(\S+)\s*\{", site) == ["/healthz", "/r/", MCP_PATH, "/text/healthz", "/text/r/", f"/text{AGENT_PATH}", "/"]
 
 
 def test_cloud_image_has_the_fallback_fonts() -> None:

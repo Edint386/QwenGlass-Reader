@@ -42,6 +42,23 @@ ssh ubuntu@server.example.com sudo docker logs --tail 50 -f glassreader
 
 看日志。页图地址里的 key 已经打码。
 
+## Agent 文字版实例
+
+`agent` 分支上的这几个文件都指向第二个实例，和页图版并存：
+
+| 项 | 页图版（main） | 文字版（agent） |
+|---|---|---|
+| 目录 | `/opt/glassreader` | `/opt/glassreader-text` |
+| 容器 | `glassreader` | `glassreader-text` |
+| 回环端口 | 19516 | 19517 |
+| 公网路径 | `/healthz`、`/r/`、`/mcp` | `/text/healthz`、`/text/r/`、`/text/agent` |
+| 书库 | 自己的 `books/` | 只读挂载页图版的 `books/` |
+| 进度和显示设置 | 自己的 `data/` | 读写挂载页图版的 `data/`，两边共用 `progress.json` |
+
+两个进程同时写同一个文件靠 `progress.json.lock` 的文件锁，写之前先读最新内容，所以共用目录必须在同一台机器的本地磁盘上。
+
+`push.sh` 发布当前分支的工作目录，所以运行前先看清在哪个分支上。`.env` 从页图版复制，`READER_PUBLIC_URL` 改成 `https://reader.example.com/text`，别的不变。站点配置要有 `upstream glassreader_text` 和三个 `/text/` 位置，`site.https.conf` 里都写好了。
+
 ## 从零部署
 
 1. DNS：`reader` A 记录指向服务器。

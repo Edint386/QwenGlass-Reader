@@ -1,0 +1,266 @@
+<view xmlns:a="waft://dsl" width="100%" height="100%" flex-flow="row" flex-cross="start" column-gap="0" bg-color="#000000">
+  <!-- reader-text：Agent 文字传输版的阅读页（docs/agent.md），功能和 pages/reader 一样，正文是原生文字。服务端用 SHOW_UI 推数据。
+       u t：书名图地址前缀、书名。s：打开时的亮度。v：语音翻页次数。bar：进度条宽度。ls：1 = 正在听书。fs fw：字号、字重（400 常规、700 粗体）。
+       s0～s7 / h0～h7 / r0～r7 / f0～f7：环上八个槽的正文、章节名、百分比、页码。i 是当前显示的槽：
+       翻页只改 i，立即响应，再上报新的槽号，服务端记进度并补上离得远的槽。
+       没有行距设置：原生 label 没有行距属性；一行一个 label 又会超过 128 个绑定（a:for 每行都算，隐藏的槽也算）。
+       m：0 = 阅读，1～6 = 主菜单选中第 m 项，11～14 = 显示设置菜单选中第 m - 10 项，21～23 = 调字号、粗细、亮度，25 = 自动翻页设置。
+       bv：亮度，lv：亮度档位，100% 是 0，每低 10% 加 1，遮罩透明度按它算。字号、粗细、亮度滑动时在页面里改，立刻生效，单击保存才上报：上报一圈要约 2 秒。字号变了，断行要等服务端重新分页。
+       fs fw 放在主数据里，页面用 dataSource:// 写，服务端的 UPDATE 也写这里（语音改字号、换书），不用重开页面，自动翻页也不会停。服务端写不到 d:。
+       s（d:）：自动翻页设置里的秒数，0 = 关闭；p：生效的秒数，0 = 自动翻页关闭；c：这一页还剩几秒；r：计时循环在跑；vs：看到过的 v。
+       一次 data:// 写多个键用 &amp; 分隔；按键链按状态分支，缺了哪个键就落到下一支，所以每支都写全。菜单首尾相接。 -->
+  <!-- 第一次双击只显示 confirm-back-text，第二次才触发 on-key-back 并关页面。提示显示在 prompt-config 的位置，空文字时平时看不见。
+       不能写 forbidden="back"：真机和模拟器都是双击完全没反应，on-key-back 也不触发，和文档相反 -->
+  <page-meta theme="no-status-bar|disable-chat-bar" screen-awake="keep" confirm-back-text="再双击一次退出" />
+  <prompt-config text="" />
+  <data i="0" bv="100" lv="0" m="0" s="7" p="0" c="0" r="0" vs="0" net="1" bt="1" />
+  <json turn='{"slot": {{d:i}}}' cfg='{"f": {{fs}}, "w": {{fw}}, "b": {{d:bv}}}' />
+  <connection-event on-net-connected="data://update?net=1" on-net-disconnected="data://update?net=0"
+                    on-gma-connected="data://update?bt=1" on-gma-disconnected="data://update?bt=0" />
+
+  <key-event a:if="{{d:m == 0}}" on-key-enter="data://update?m=1" on-key-next="emit://event/next?" on-key-prev="emit://event/prev?" />
+  <key-event a:elif="{{d:m == 25}}" on-key-enter="emit://event/start?" on-key-next="emit://event/more?" on-key-prev="emit://event/less?" />
+  <key-event a:elif="{{d:m > 20}}" on-key-enter="emit://event/save?" on-key-next="emit://event/up{{d:m}}?" on-key-prev="emit://event/down{{d:m}}?" />
+  <key-event a:elif="{{d:m == 14}}" on-key-enter="data://update?m=5" on-key-next="data://update?m=11" on-key-prev="data://update?m=13" />
+  <key-event a:elif="{{d:m == 11}}" on-key-enter="data://update?m=21" on-key-next="data://update?m=12" on-key-prev="data://update?m=14" />
+  <key-event a:elif="{{d:m > 10}}" on-key-enter="data://update?m={{d:m + 10}}" on-key-next="data://update?m={{d:m + 1}}" on-key-prev="data://update?m={{d:m - 1}}" />
+  <key-event a:elif="{{d:m == 1}}" on-key-enter="data://update?c={{d:p}}&amp;m=0" on-key-next="data://update?m=2" on-key-prev="data://update?m=6" />
+  <key-event a:elif="{{d:m == 2}}" on-key-enter="emit://event/auto?" on-key-next="data://update?m=3" on-key-prev="data://update?m=1" />
+  <key-event a:elif="{{d:m == 3}}" on-key-enter="emit://event/nextch?" on-key-next="data://update?m=4" on-key-prev="data://update?m=2" />
+  <key-event a:elif="{{d:m == 4}}" on-key-enter="emit://event/prevch?" on-key-next="data://update?m=5" on-key-prev="data://update?m=3" />
+  <key-event a:elif="{{d:m == 6}}" on-key-enter="emit://event/listen?" on-key-next="data://update?m=1" on-key-prev="data://update?m=5" />
+  <!-- 退出：服务结束会话，麦克风才会关；所有状态的 on-key-back 都落到这一支 -->
+  <key-event a:else="" on-key-enter="data://update?m=11" on-key-next="data://update?m=6" on-key-prev="data://update?m=4" on-key-back="svc://ui-action?mode=mcp&amp;name=exit&amp;params={{json:turn}}" />
+  <!-- 先改 i 再上报：上报时才取 turn 的值 -->
+  <event match="event://next?" a:if="{{d:i == 7}}" action="data://update?i=0&amp;c={{d:p}}" />
+  <event match="event://next?" a:else="" action="data://update?i={{d:i + 1}}&amp;c={{d:p}}" />
+  <event match="event://next?" action="svc://ui-action?mode=mcp&amp;name=turn&amp;params={{json:turn}}" />
+  <event match="event://prev?" a:if="{{d:i == 0}}" action="data://update?i=7&amp;c={{d:p}}" />
+  <event match="event://prev?" a:else="" action="data://update?i={{d:i - 1}}&amp;c={{d:p}}" />
+  <event match="event://prev?" action="svc://ui-action?mode=mcp&amp;name=turn&amp;params={{json:turn}}" />
+  <event match="event://nextch?" action="data://update?c={{d:p}}&amp;m=0" />
+  <event match="event://nextch?" action="svc://ui-action?mode=mcp&amp;name=next_chapter&amp;params={{json:turn}}" />
+  <event match="event://prevch?" action="data://update?c={{d:p}}&amp;m=0" />
+  <event match="event://prevch?" action="svc://ui-action?mode=mcp&amp;name=prev_chapter&amp;params={{json:turn}}" />
+  <!-- 听书时翻页跟着声音走，自动翻页要关掉，不然每翻一页都算用户翻走 -->
+  <event match="event://listen?" action="data://update?p=0&amp;m=0" />
+  <event match="event://listen?" action="svc://ui-action?mode=mcp&amp;name=listen&amp;params={{json:turn}}" />
+  <!-- 原生字号只有固定档位：24 以上是 28、32，上下都要跳档 -->
+  <event match="event://up21?" a:if="{{fs == 24}}" action="dataSource://update?fs=28" />
+  <event match="event://up21?" a:elif="{{fs == 28}}" action="dataSource://update?fs=32" />
+  <event match="event://up21?" a:elif="{{fs != 32}}" action="dataSource://update?fs={{fs + 2}}" />
+  <event match="event://down21?" a:if="{{fs == 32}}" action="dataSource://update?fs=28" />
+  <event match="event://down21?" a:elif="{{fs == 28}}" action="dataSource://update?fs=24" />
+  <event match="event://down21?" a:elif="{{fs != 16}}" action="dataSource://update?fs={{fs - 2}}" />
+  <event match="event://up22?" action="dataSource://update?fw=700" />
+  <event match="event://down22?" action="dataSource://update?fw=400" />
+  <event match="event://up23?" a:if="{{d:bv != 100}}" action="data://update?lv={{d:lv - 1}}&amp;bv={{d:bv + 10}}" />
+  <event match="event://down23?" a:if="{{d:bv != 10}}" action="data://update?lv={{d:lv + 1}}&amp;bv={{d:bv - 10}}" />
+  <event match="event://more?" a:if="{{d:s != 30}}" action="data://update?s={{d:s + 1}}" />
+  <event match="event://less?" a:if="{{d:s != 0}}" action="data://update?s={{d:s - 1}}" />
+  <event match="event://save?" action="data://update?m={{d:m - 10}}" />
+  <event match="event://save?" action="svc://ui-action?mode=mcp&amp;name=display&amp;params={{json:cfg}}" />
+  <event match="event://auto?" a:if="{{d:p > 0}}" action="data://update?p=0&amp;m=0" />
+  <event match="event://auto?" a:else="" action="data://update?m=25" />
+  <event match="event://init?" a:if="{{s.b > 0}}" action="data://update?bv={{s.b}}&amp;lv={{100 - s.b}}" />
+  <event match="event://init?" action="data://update?lv={{d:lv / 10}}" />
+  <event match="event://start?" action="data://update?p={{d:s}}&amp;c={{d:s}}&amp;m=0" />
+  <event match="event://start?" a:if="{{d:s == 0}}" action="data://update?s=7" />
+  <event match="event://start?" a:if="{{d:r == 0}}" action="emit://event/d183?n=183" />
+  <event match="event://start?" a:if="{{d:r == 0}}" action="data://update?r=1" />
+  <event match="event://d1" action="emit://event/d{{e:n - 1}}?n={{e:n - 1}}" />
+  <event match="event://d9" a:if="{{d:p == 0}}" action="data://update?r=0" />
+  <event match="event://d9" a:elif="{{d:m == 0}}" action="emit://event/second?" />
+  <event match="event://d9" a:if="{{d:p > 0}}" action="emit://event/d183?n=183" />
+  <!-- 语音翻页发生在服务端，页面没有数据变化事件，只能每秒对一下 v，变了就重新计时 -->
+  <event match="event://second?" a:if="{{d:vs != v}}" action="data://update?vs={{v}}&amp;c={{d:p}}" />
+  <event match="event://second?" a:elif="{{d:c > 1}}" action="data://update?c={{d:c - 1}}" />
+  <event match="event://second?" a:else="" action="emit://event/next?" />
+  <!-- 看不见的时候不翻：页面被遮挡、灭屏、摘下眼镜都关掉自动翻页 -->
+  <lifecycle-event on-load="emit://event/init?" on-hide="data://update?p=0" on-screen-off="data://update?p=0" />
+  <wear-event on-wear-off="data://update?p=0" />
+
+  <!-- 可见元素都放在这一层里：根节点直接子元素最多 64 个，事件已经占了大半 -->
+  <view width="100%" height="100%" flex-flow="row" flex-cross="start" column-gap="0">
+    <!-- 左栏：书名 + 时间 + 连接状态。书名是服务端排好的图：长书名要缩小排两列，原生控件算不出字数 -->
+    <view width="80" height="290" flex-flow="column" flex-cross="center" padding-top="16" row-gap="10">
+      <!-- 书名图是纯白的，opa 压一点，不比正文亮 -->
+      <image src="{{u}}/title.png" width="72" height="176" opa="210" />
+      <view width="36" height="1" bg-color="#3A3A3A" />
+      <!-- 时间随每次绑定刷新更新；不用 tick：真机上图片没加载完时，每次刷新都会让它重新加载，
+           所以关闭自动翻页时页面完全不刷新 -->
+      <label text="{{f:formatDate('now', 'HH:mm')}}" width="72" height="24" font-size="20" color="#7A7A7A" text-align="center" />
+      <label a:if="{{d:net == 0}}" text="手机断网" width="72" height="20" font-size="16" color="#FFFFFF" text-align="center" />
+      <label a:elif="{{d:bt == 0}}" text="蓝牙断开" width="72" height="20" font-size="16" color="#FFFFFF" text-align="center" />
+      <!-- 原生字号只有固定档位，15 会退回 14；14 号时“30 秒后翻页”约 75 px，所以宽度用满侧栏。
+           “已暂停”不用一个 label 换行：两行的行距超过 40 px，第二行会被裁掉 -->
+      <view a:elif="{{d:p > 0}}" width="80" height="40" flex-flow="column" flex-cross="center" row-gap="0">
+        <label a:if="{{d:m > 0}}" text="自动翻页" width="72" height="20" font-size="16" color="#8A8A8A" text-align="center" />
+        <label a:if="{{d:m > 0}}" text="已暂停" width="72" height="20" font-size="16" color="#8A8A8A" text-align="center" />
+        <label a:if="{{d:m == 0}}" text="{{d:c}} 秒后翻页" width="80" height="20" font-size="14" color="#8A8A8A" text-align="center" />
+      </view>
+    </view>
+    <view width="1" height="250" margin-top="20" bg-color="#464646" />
+
+    <!-- 正文：环上八个槽，翻页只切换显示哪一个。页眉、进度条在槽外面，每个槽只放随页变的内容。
+         线条、页眉、页码的位置和颜色都照页图版（pager.py）：竖线和横线不相接。
+         进度条只有一条：width 这种布局绑定每次写数据都重新设置，每槽一条时菜单移动、倒计时每写一次都多刷 8 个。
+         宽度跟着服务端的 UPDATE 走，比翻页晚约 0.5 秒。
+         28、32 只有粗体字模，字重写 400 显示的也是粗体 -->
+    <view width="478" height="290">
+      <view floating="true" left="14" top="24" width="450" height="1" bg-color="#464646" />
+      <view floating="true" left="14" top="278" width="380" height="2" bg-color="#464646" />
+      <view floating="true" left="14" top="278" width="{{bar}}" height="2" bg-color="#7A7A7A" />
+      <view a:if="{{d:i == 0}}" floating="true" left="0" top="0" width="478" height="290">
+        <label text="{{h0}}" floating="true" left="14" top="3" width="370" height="20" font-size="16" color="#7A7A7A" long-mode="dot" />
+        <label text="{{r0}}" floating="true" left="394" top="3" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+        <label text="{{s0}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+        <label text="{{f0}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+      </view>
+      <view a:if="{{d:i == 1}}" floating="true" left="0" top="0" width="478" height="290">
+        <label text="{{h1}}" floating="true" left="14" top="3" width="370" height="20" font-size="16" color="#7A7A7A" long-mode="dot" />
+        <label text="{{r1}}" floating="true" left="394" top="3" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+        <label text="{{s1}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+        <label text="{{f1}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+      </view>
+      <view a:if="{{d:i == 2}}" floating="true" left="0" top="0" width="478" height="290">
+        <label text="{{h2}}" floating="true" left="14" top="3" width="370" height="20" font-size="16" color="#7A7A7A" long-mode="dot" />
+        <label text="{{r2}}" floating="true" left="394" top="3" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+        <label text="{{s2}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+        <label text="{{f2}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+      </view>
+      <view a:if="{{d:i == 3}}" floating="true" left="0" top="0" width="478" height="290">
+        <label text="{{h3}}" floating="true" left="14" top="3" width="370" height="20" font-size="16" color="#7A7A7A" long-mode="dot" />
+        <label text="{{r3}}" floating="true" left="394" top="3" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+        <label text="{{s3}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+        <label text="{{f3}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+      </view>
+      <view a:if="{{d:i == 4}}" floating="true" left="0" top="0" width="478" height="290">
+        <label text="{{h4}}" floating="true" left="14" top="3" width="370" height="20" font-size="16" color="#7A7A7A" long-mode="dot" />
+        <label text="{{r4}}" floating="true" left="394" top="3" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+        <label text="{{s4}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+        <label text="{{f4}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+      </view>
+      <view a:if="{{d:i == 5}}" floating="true" left="0" top="0" width="478" height="290">
+        <label text="{{h5}}" floating="true" left="14" top="3" width="370" height="20" font-size="16" color="#7A7A7A" long-mode="dot" />
+        <label text="{{r5}}" floating="true" left="394" top="3" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+        <label text="{{s5}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+        <label text="{{f5}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+      </view>
+      <view a:if="{{d:i == 6}}" floating="true" left="0" top="0" width="478" height="290">
+        <label text="{{h6}}" floating="true" left="14" top="3" width="370" height="20" font-size="16" color="#7A7A7A" long-mode="dot" />
+        <label text="{{r6}}" floating="true" left="394" top="3" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+        <label text="{{s6}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+        <label text="{{f6}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+      </view>
+      <view a:if="{{d:i == 7}}" floating="true" left="0" top="0" width="478" height="290">
+        <label text="{{h7}}" floating="true" left="14" top="3" width="370" height="20" font-size="16" color="#7A7A7A" long-mode="dot" />
+        <label text="{{r7}}" floating="true" left="394" top="3" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+        <label text="{{s7}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+        <label text="{{f7}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+      </view>
+    </view>
+
+    <view width="1" height="250" margin-top="20" bg-color="#464646" />
+    <!-- 右栏：操作提示（阅读）/ 菜单操作提示（菜单） -->
+    <view a:if="{{d:m == 0}}" width="80" height="290" flex-flow="column" flex-cross="center" padding-top="26" row-gap="6">
+      <label text="前滑" width="72" height="20" font-size="16" color="#7A7A7A" text-align="center" />
+      <label text="下一页" width="72" height="24" font-size="20" color="#8A8A8A" text-align="center" />
+      <label text="后滑" width="72" height="20" font-size="16" color="#7A7A7A" text-align="center" margin-top="8" />
+      <label text="上一页" width="72" height="24" font-size="20" color="#8A8A8A" text-align="center" />
+      <label text="单击" width="72" height="20" font-size="16" color="#7A7A7A" text-align="center" margin-top="8" />
+      <label text="菜单" width="72" height="24" font-size="20" color="#8A8A8A" text-align="center" />
+      <label text="双击" width="72" height="20" font-size="16" color="#7A7A7A" text-align="center" margin-top="8" />
+      <label text="退出" width="72" height="24" font-size="20" color="#8A8A8A" text-align="center" />
+    </view>
+    <view a:elif="{{d:m == 25}}" width="80" height="290" flex-flow="column" flex-cross="center" padding-top="66" row-gap="6">
+      <label text="前滑" width="72" height="20" font-size="16" color="#7A7A7A" text-align="center" />
+      <label text="加 1 秒" width="72" height="24" font-size="20" color="#8A8A8A" text-align="center" />
+      <label text="后滑" width="72" height="20" font-size="16" color="#7A7A7A" text-align="center" margin-top="8" />
+      <label text="减 1 秒" width="72" height="24" font-size="20" color="#8A8A8A" text-align="center" />
+      <label text="单击" width="72" height="20" font-size="16" color="#7A7A7A" text-align="center" margin-top="8" />
+      <label text="确定" width="72" height="24" font-size="20" color="#8A8A8A" text-align="center" />
+    </view>
+    <!-- 调显示设置：只占右栏，正文露在外面，滑动时字号、粗细、亮度立刻变 -->
+    <view a:elif="{{d:m > 20}}" width="80" height="290" flex-flow="column" flex-cross="center" padding-top="72" row-gap="0">
+      <label a:if="{{d:m == 21}}" text="字号" width="72" height="30" font-size="24" color="#D0D0D0" text-align="center" />
+      <label a:elif="{{d:m == 22}}" text="粗细" width="72" height="30" font-size="24" color="#D0D0D0" text-align="center" />
+      <label a:else="" text="亮度" width="72" height="30" font-size="24" color="#D0D0D0" text-align="center" />
+      <label a:if="{{d:m == 21}}" text="{{fs}}" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
+      <label a:elif="{{d:m == 23}}" text="{{d:bv}}%" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
+      <label a:elif="{{fw == 700}}" text="粗体" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
+      <label a:else="" text="常规" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
+      <label text="单击保存" width="72" height="24" margin-top="14" font-size="16" color="#A0A0A0" text-align="center" />
+    </view>
+    <view a:else="" width="80" height="290" flex-flow="column" flex-cross="center" padding-top="96" row-gap="6">
+      <label text="滑动" width="72" height="20" font-size="16" color="#7A7A7A" text-align="center" />
+      <label text="选择" width="72" height="24" font-size="20" color="#8A8A8A" text-align="center" />
+      <label text="单击" width="72" height="20" font-size="16" color="#7A7A7A" text-align="center" margin-top="8" />
+      <label text="确定" width="72" height="24" font-size="20" color="#8A8A8A" text-align="center" />
+    </view>
+
+    <!-- 自动翻页设置：大字显示秒数 -->
+    <view a:if="{{d:m == 25}}" floating="true" left="186" top="44" width="268" height="202"
+          bg-color="#000000" bg-opa="255" border-width="2" border-color="#A0A0A0" radius="10"
+          flex-flow="column" flex-cross="center" row-gap="0" padding-top="18">
+      <label text="自动翻页" width="236" height="32" font-size="22" color="#D0D0D0" text-align="center" />
+      <view a:if="{{d:s != 0}}" width="236" height="84" margin-top="8" flex-flow="row" flex-align="center" flex-cross="end" column-gap="8">
+        <label text="{{d:s}}" height="72" font-size="58" font-weight="bold" color="#FFFFFF" />
+        <label text="秒" height="40" font-size="24" color="#D0D0D0" />
+      </view>
+      <label a:else="" text="关闭" width="236" height="84" margin-top="8" font-size="44" font-weight="bold" color="#FFFFFF" text-align="center" />
+      <label a:if="{{d:s != 0}}" text="每页停留时间" width="236" height="28" margin-top="10" font-size="20" color="#D0D0D0" text-align="center" />
+      <label a:else="" text="单击返回阅读" width="236" height="28" margin-top="10" font-size="20" color="#D0D0D0" text-align="center" />
+    </view>
+    <!-- 占位：调显示设置时不盖住正文，也不能落到下面的菜单分支 -->
+    <view a:elif="{{d:m > 20}}" floating="true" left="0" top="0" width="1" height="1" />
+
+    <!-- 显示设置菜单：每项后面是当前值；调好保存后回到这里，方便接着调别的 -->
+    <view a:elif="{{d:m > 10}}" floating="true" left="186" top="62" width="268" height="166"
+          bg-color="#000000" bg-opa="255" border-width="2" border-color="#A0A0A0" radius="10"
+          flex-flow="column" flex-cross="center" row-gap="0" padding-top="9">
+      <view a:if="{{d:m == 11}}" floating="true" left="14" top="0" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 12}}" floating="true" left="14" top="36" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 13}}" floating="true" left="14" top="72" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 14}}" floating="true" left="14" top="108" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <label text="字号  {{fs}}" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label a:if="{{fw == 700}}" text="粗细  粗体" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label a:else="" text="粗细  常规" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="亮度  {{d:bv}}%" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="返回" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+    </view>
+
+    <!-- 主菜单：盖在正文中间；高亮框随 m 移动 -->
+    <view a:elif="{{d:m > 0}}" floating="true" left="186" top="28" width="268" height="238"
+          bg-color="#000000" bg-opa="255" border-width="2" border-color="#A0A0A0" radius="10"
+          flex-flow="column" flex-cross="center" row-gap="0" padding-top="9">
+      <!-- 高亮框：五个固定位置按 m 显示其一。不用 top="{{d:m * 36 - 36}}"：模拟器里只算第一个运算符（得 m*36）。
+           floating 子元素的 left/top 从父容器内边距以内算起。 -->
+      <view a:if="{{d:m == 1}}" floating="true" left="14" top="0" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 2}}" floating="true" left="14" top="36" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 3}}" floating="true" left="14" top="72" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 4}}" floating="true" left="14" top="108" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 5}}" floating="true" left="14" top="144" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 6}}" floating="true" left="14" top="180" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <label text="返回阅读" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label a:if="{{d:p > 0}}" text="停止自动翻页" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label a:else="" text="自动翻页" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="下一章" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="上一章" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="显示设置" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label a:if="{{ls == 1}}" text="暂停听书" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+      <label a:else="" text="听书" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+    </view>
+
+    <!-- 亮度：上面盖半透明黑色，改亮度不用服务端，必须放在最后。屏幕灰度低于约 30 就不发光，笔画边缘更早消失（字被“侵蚀”），
+         亮度 10% 时正文灰度留约 52，再低笔画就断了；页眉页脚和两栏的字本来就暗，遮得少一些。书名图不暗，和正文遮得一样多。
+         表达式只认整数：* 0.5 算出来是 0，超出 0～255 会回绕 -->
+    <view floating="true" left="81" top="28" width="478" height="243" bg-color="#000000" bg-opa="{{d:lv * 22}}" />
+    <view floating="true" left="81" top="0" width="478" height="28" bg-color="#000000" bg-opa="{{d:lv * 15}}" />
+    <view floating="true" left="81" top="271" width="478" height="19" bg-color="#000000" bg-opa="{{d:lv * 15}}" />
+    <view floating="true" left="0" top="0" width="80" height="197" bg-color="#000000" bg-opa="{{d:lv * 22}}" />
+    <view floating="true" left="0" top="197" width="80" height="93" bg-color="#000000" bg-opa="{{d:lv * 15}}" />
+    <view floating="true" left="80" top="0" width="1" height="290" bg-color="#000000" bg-opa="{{d:lv * 15}}" />
+    <view floating="true" left="559" top="0" width="81" height="290" bg-color="#000000" bg-opa="{{d:lv * 15}}" />
+  </view>
+</view>

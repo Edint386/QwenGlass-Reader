@@ -7,6 +7,7 @@
 ``GET /r/{key}/{book}/{session}/title.png``     左栏竖排书名图
 ``GET /r/{key}/{book}/{session}/{n}.jpg``       同上，JPEG（真机不显示 PNG 时的退路，research §7 P1）
 ``/mcp``                                        MCP streamable HTTP（stateless + JSON 响应），Bearer 鉴权
+``WS /agent``                                   Agent 自定义接入（文字传输版，glassreader/agent.py），Bearer 鉴权
 ==============================================  ==============================================================
 
 - 眼镜发不了请求头，页图只能靠路径里的随机 key 鉴权；key 不对、书不存在、地址不合法一律同样的 404，
@@ -36,12 +37,14 @@ from starlette.datastructures import Headers
 from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+from starlette.websockets import WebSocket
 
+from .agent import AGENT_PATH, AgentHub, serve
 from .config import Settings
 from .library import Library, parse_counters
-from .mcp_tools import build_mcp_server
+from .mcp_tools import ReaderTools, build_mcp_server
 
 __all__ = ["COMMON_HEADERS", "MCP_PATH", "create_app", "redact_path"]
 
@@ -250,6 +253,11 @@ def create_app(
         data, headers = result
         return Response(data, media_type="image/png" if ext == "png" else "image/jpeg", headers=headers)
 
+    hub = AgentHub(ReaderTools(settings, library), library)
+
+    async def agent(ws: WebSocket) -> None:
+        await serve(ws, hub, settings.token, McpGuardMiddleware.extract_token)
+
     async def internal_error(request: Request, exc: Exception) -> Response:
         # 500 由 ServerErrorMiddleware 直接发出、绕过上面的中间件，通用头要写在这里
         # （缺 CORP 的响应，模拟器连状态码都看不到）
@@ -269,6 +277,7 @@ def create_app(
         routes=[
             Route("/healthz", healthz, methods=["GET"]),
             Route("/r/{key}/{book}/{session}/{file}", page, methods=["GET"]),
+            WebSocketRoute(AGENT_PATH, agent),
             *mcp_app.routes,
         ],
         middleware=middleware,
@@ -278,4 +287,5 @@ def create_app(
     app.state.settings = settings
     app.state.library = library
     app.state.mcp_server = server
+    app.state.agent_hub = hub
     return app

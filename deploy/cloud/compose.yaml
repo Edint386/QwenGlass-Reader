@@ -1,13 +1,13 @@
-# glassreader 云端运行（deploy/cloud/README.md）。放在服务器 /opt/glassreader/。
-# 只监听回环：公网入口是 OpenResty 的 reader.example.com 站点（site.https.conf）。
-name: glassreader
+# Agent 文字版的云端实例（deploy/cloud/README.md）。放在服务器 /opt/glassreader-text/，和页图版并存。
+# 书库和进度都用页图版那份，两边接着读。只监听回环：公网入口是 OpenResty 上的 /text/（site.https.conf）。
+name: glassreader-text
 
 services:
   reader:
     build:
       context: ./app
-    image: glassreader:local
-    container_name: glassreader
+    image: glassreader-text:local
+    container_name: glassreader-text
     env_file:
       - ./.env
     environment:
@@ -17,10 +17,10 @@ services:
       READER_STATE_FILE: /data/progress.json
       TZ: UTC
     ports:
-      - 127.0.0.1:19516:8780
+      - 127.0.0.1:19517:8780
     volumes:
-      - ./books:/books:ro
-      - ./data:/data
+      - /opt/glassreader/books:/books:ro
+      - /opt/glassreader/data:/data
     restart: unless-stopped
     read_only: true
     tmpfs:

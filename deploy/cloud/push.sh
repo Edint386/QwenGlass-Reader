@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# 把代码发到云端并重建容器。在 Mac 上运行，位置不限。不碰 .env、书库和进度。
+# 把 Agent 文字版发到云端并重建它的容器。在 Mac 上运行，位置不限。不碰 .env、书库、进度和页图版实例。
 set -eu
 
 HOST="${READER_CLOUD_HOST:-ubuntu@server.example.com}"
-ROOT=/opt/glassreader
+ROOT=/opt/glassreader-text
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 
