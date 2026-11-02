@@ -9,7 +9,10 @@ RUN apt-get update \
     && pip install --no-cache-dir uv==0.11.32
 
 WORKDIR /app
+# 依赖单独一层，只改代码时不重装。字节码在这里编译好：容器根文件系统只读，运行时写不了 .pyc，每次启动都要现编译
+ENV UV_COMPILE_BYTECODE=1
 COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
 COPY glassreader ./glassreader
 RUN uv sync --frozen --no-dev --no-editable
 

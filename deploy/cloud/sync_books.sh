@@ -6,5 +6,7 @@ set -eu
 HOST="${READER_CLOUD_HOST:-ubuntu@server.example.com}"
 BOOKS="${1:-$HOME/Books}"
 
-rsync -rt --include='*/' --include='*.txt' --exclude='*' --rsync-path='sudo rsync' \
+rsync -rt --include='*/' --include='*.[tT][xX][tT]' --exclude='*' --rsync-path='sudo rsync' \
     "$BOOKS/" "$HOST:/opt/glassreader/books/"
+# 文件权限沿用源文件，属主是 root：0600 的书容器用户（10001）读不了
+ssh "$HOST" "sudo chmod -R a+rX /opt/glassreader/books"

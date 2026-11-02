@@ -39,7 +39,7 @@
 | `READER_TOKEN` | 平台 MCP 插件的 Bearer Token。不填每次启动随机生成（平台插件会失效） |
 | `READER_KEY` | 页图地址里的随机段：眼镜发不了请求头，页图只能靠路径鉴权 |
 | `READER_PUBLIC_URL` | 眼镜和平台访问的公网根地址，可带路径前缀（反代剥掉前缀后转发），如 `https://cast.example.com/reader`。不填只能本机联调 |
-| `READER_BOOKS_DIR` | TXT 书库目录，递归收集 `*.txt`（默认 `~/Books`） |
+| `READER_BOOKS_DIR` | TXT 书库目录，递归收集 `*.txt`，扩展名不分大小写（默认 `~/Books`） |
 | `READER_STATE_FILE` | 进度文件（默认 `~/Library/Application Support/glassreader/progress.json`） |
 | `READER_HOST` / `READER_PORT` | 监听地址（默认 `127.0.0.1:8780`） |
 | `READER_SWAP_SWIPE` | `1` = 前滑 / 后滑方向对调（真机方向与预期相反时用，不用改页面） |

@@ -1,14 +1,17 @@
 """书库、阅读位置和进度（docs/research.md §4.2、§4.5）。
 
-- 书库是一个目录，递归收集 ``*.txt``；书按需解析，文件改了（mtime 变了）下次用到时重新解析。
-- 阅读位置 = 全书字符偏移 + 字号，存在一个 JSON 文件里（原子替换）。换字号重新分页后仍落在同一段文字。
+- 书库是一个目录，递归收集 ``*.txt``（不分大小写）；书按需解析，文件改了（mtime 变了）下次用到时重新解析。
+- 阅读位置 = 全书字符偏移 + 字号，存在一个 JSON 文件里（原子替换，旁边留一份 ``.bak``）。换字号重新分页后仍落在同一段文字。
   粗细、亮度、行距是全局设置，换一本书不用重新调，存在同一个文件的 ``_display`` 键下。
+  智能翻页的速度只有文字版用，存在 ``_text`` 键下。两个实例保存设置时都只写改动的几项，在文件锁里和最新内容合并。
 - 眼镜页面每个翻页操作只给一个累计计数器加一（a 下一页、b 上一页、j 下一章、k 上一章、z 自动翻页），
   页图地址里带着全部计数。这里记住每个会话上次看到的计数，按差值移动位置：
   内核重复请求同一地址时差值为 0；中间某个地址没发出来，下一个地址的计数已经包含了它。
   会话的第一次请求只记基线：页面经 on-new-intent 换了新会话时，计数器不会归零。
 - 地址最后四段是显示设置保存后的值（字号、粗细、亮度、行距），0 = 这次打开还没保存过。这几个是绝对值不是计数：
-  页面打开时由 dataSource 的 ``s`` 拿到当前值，在设置里调好后才写进地址。
+  页面打开时由 dataSource 的 ``s`` 拿到当前值，在设置里调好后才写进地址。之后每个地址都带着它，页面重开也不清零，
+  这期间文字版可能改过同一项，所以也按会话记住上次的值，某一段变了才算用户刚调的；会话的第一次请求只记基线。
+  亮度段还有一条：退出亮度面板时没调也会写，所以从 0 变成页面打开时拿到的值不算改动。
 """
 
 from __future__ import annotations
@@ -17,13 +20,15 @@ import fcntl
 import io
 import json
 import logging
+import math
 import os
 import re
 import secrets
+import shutil
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import lru_cache
@@ -50,6 +55,10 @@ from .pager import (
 __all__ = [
     "BRIGHTNESS_LEVELS",
     "COUNTER_NAMES",
+    "DEFAULT_OPTICS",
+    "DEFAULT_PACE",
+    "OPTICS_LEVELS",
+    "PACES",
     "SETTING_NAMES",
     "Display",
     "Entry",
@@ -69,6 +78,16 @@ SETTING_NAMES = ("font", "weight", "brightness", "spacing")
 BRIGHTNESS_LEVELS = tuple(range(10, 101, 10))
 #: 进度文件里放显示设置的键：不是书 id，书库里的书不会撞上
 DISPLAY_KEY = "_display"
+#: 放文字版自己的设置的键。页图版读进 Display 也用不上，保存设置时不写它
+TEXT_KEY = "_text"
+#: 智能翻页每秒多少字（文字版用），页面上每次加减 2
+PACES = range(4, 61, 2)
+DEFAULT_PACE = 18
+#: 真机亮度（文字版用），平台的工具收 0～100。读不到眼镜的真实值，这里只记用户上次设的数
+OPTICS_LEVELS = range(0, 101, 10)
+DEFAULT_OPTICS = 50
+#: 内存里留几本解析好的书：近 30 MB 的书每本占 30～50 MB，容器只有 256 MB
+MAX_BOOKS = 2
 #: 记住多少个会话的计数基线（每次打开页面一个会话）
 MAX_SESSIONS = 512
 #: 自动翻页和手动“下一页”隔这么久以内算同一次翻页：新图加载约 1 秒，这期间眼镜上还是旧页，用户看到的不是刚翻到的那页
@@ -90,14 +109,44 @@ def parse_counters(raw: str) -> tuple[int, ...]:
     return (*nums[:4], nums[6], *[0] * len(SETTING_NAMES))
 
 
+def _saved_number(value: Any, name: str) -> float:
+    """进度文件里的数字。手改坏了按没读过算，和坏的显示设置一样不报错：一条坏记录不能挡住打开书。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = math.nan
+    if not math.isfinite(number):
+        log.warning("进度文件里的 %s 不是数字：%r，按 0 算", name, value)
+        return 0.0
+    return number
+
+
+def _read_progress(path: Path) -> dict[str, dict[str, Any]]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("顶层不是对象")
+    return {k: v for k, v in data.items() if isinstance(v, dict)}
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
 def new_session_id() -> str:
     """会话号：时间 + 随机，只含字母数字（地址路径里用，内核按完整 URL 缓存，每次打开都要新的）。"""
     return time.strftime("%m%d%H%M%S") + secrets.token_hex(3)
 
 
+def _bare_title(text: str) -> str:
+    """去掉书名号和空白，标点还在：《三体！》和《三体》是两本书，按前者的全名要能找到它。"""
+    return re.sub(r"[《》<>〈〉「」『』\s　]", "", text)
+
+
 def normalize_title(text: str) -> str:
-    """书名比较用：去掉书名号、引号、空白，英文小写。"""
-    return re.sub(r"[《》<>〈〉「」『』“”\"'\s　]", "", text).lower()
+    """书名比较用：去掉书名号、引号、空白、标点，英文小写。语音命令去掉了标点，这里不去的话带标点的书名对不上。"""
+    return re.sub(r"[“”\"'，。！？、,.!?]", "", _bare_title(text)).lower()
 
 
 @dataclass(frozen=True)
@@ -125,24 +174,30 @@ class View:
 
 @dataclass(frozen=True)
 class Display:
-    """全局显示设置：粗细档位（0 起）、亮度百分比、行距百分比。"""
+    """全局显示设置：粗细档位（0 起）、亮度百分比、行距百分比、智能翻页每秒字数、真机亮度。"""
 
     weight: int = DEFAULT_WEIGHT
     brightness: int = 100
     spacing: int = DEFAULT_SPACING
+    pace: int = DEFAULT_PACE
+    optics: int = DEFAULT_OPTICS
 
 
 class Library:
     def __init__(self, books_dir: Path, state_file: Path, *, swap_swipe: bool = False):
         self.books_dir = books_dir.expanduser()
         self.state_file = state_file.expanduser()
+        self.backup_file = self.state_file.with_name(self.state_file.name + ".bak")
         self.swap_swipe = swap_swipe
         self._lock = threading.RLock()
         self._entries: dict[str, Entry] = {}
-        self._books: dict[str, Book] = {}
+        self._books: OrderedDict[str, Book] = OrderedDict()
+        #: 有书离开 _books 时调用。排版缓存的键是 Book 对象，不清的话旧书一直留在内存里；别的模块的缓存也注册到这里
+        self.on_evict: list[Callable[[], None]] = [_paginate.cache_clear, _page_image.cache_clear]
         self._sessions: OrderedDict[tuple[str, str], tuple[int, ...]] = OrderedDict()
         self._last_turn: dict[tuple[str, str], tuple[float, bool]] = {}  # 会话 → (时间, 是否自动翻页)
         self._stamp: tuple[int, int] | None = None
+        self._kept_bad: tuple[int, int] | None = None  # 已经抄过一份的坏文件：写不进去时它一直在，不能每次保存都抄
         self._progress: dict[str, dict[str, Any]] = {}
         self._display = Display()
         self.scan()
@@ -153,7 +208,7 @@ class Library:
         """重新扫描书库目录（很快：只列文件，不解析）。"""
         entries: dict[str, Entry] = {}
         if self.books_dir.is_dir():
-            for path in sorted(self.books_dir.rglob("*.txt")):
+            for path in sorted(self.books_dir.rglob("*.txt", case_sensitive=False)):
                 rel = path.relative_to(self.books_dir)
                 if any(part.startswith(".") for part in rel.parts) or not path.is_file():
                     continue
@@ -162,10 +217,16 @@ class Library:
                 entries[entry.id] = entry
         with self._lock:
             self._entries = entries
-            for book_id in list(self._books):
-                if book_id not in entries:
-                    del self._books[book_id]
+            gone = [book_id for book_id in self._books if book_id not in entries]
+            for book_id in gone:
+                del self._books[book_id]
+            if gone:
+                self._evicted()
         return list(entries.values())
+
+    def _evicted(self) -> None:
+        for callback in self.on_evict:
+            callback()
 
     def entries(self) -> list[Entry]:
         with self._lock:
@@ -183,27 +244,41 @@ class Library:
                 return None
             cached = self._books.get(book_id)
             if cached is None or cached.mtime != mtime:
-                cached = Book.load(entry.path, book_id=book_id)
+                try:
+                    cached = Book.load(entry.path, book_id=book_id)
+                except OSError as exc:
+                    log.warning("读不了 %s：%s", entry.path, exc)
+                    return None
+                evict = book_id in self._books  # 文件改过，旧版本要放掉
                 self._books[book_id] = cached
+                if len(self._books) > MAX_BOOKS:
+                    self._books.popitem(last=False)
+                    evict = True
+                if evict:
+                    self._evicted()
+            self._books.move_to_end(book_id)
             return cached
 
     def find(self, query: str, *, rescan: bool = True) -> list[Entry]:
-        """按书名找书，最匹配的在前：完全相同 > 开头相同 > 包含；同档按最近阅读排。空查询返回全部（最近读的在前）。
+        """按书名找书，最匹配的在前：完全相同 > 去掉标点后相同 > 开头相同 > 包含；同档按最近阅读排。
+        空查询返回全部（最近读的在前）；只有标点不算空查询，除了书名就是这几个标点的书，什么也不匹配。
 
         一本都没找到时重新扫描一次书库再找（书是启动之后才放进去的）。
         """
-        q = normalize_title(query)
+        bare, q = _bare_title(query), normalize_title(query)
         ranked: list[tuple[int, float, str, Entry]] = []
         for e in self.entries():
             t = normalize_title(e.title)
-            if not q:
+            if not query.strip() or _bare_title(e.title) == bare:
                 rank = 0
+            elif not q:
+                continue
             elif t == q:
-                rank = 0
-            elif t.startswith(q):
                 rank = 1
-            elif q in t:
+            elif t.startswith(q):
                 rank = 2
+            elif q in t:
+                rank = 3
             else:
                 continue
             ranked.append((rank, -self.last_read(e.id), e.title, e))
@@ -218,7 +293,10 @@ class Library:
         return max(read, key=lambda e: self.last_read(e.id), default=None)
 
     def last_read(self, book_id: str) -> float:
-        return float(self.progress.get(book_id, {}).get("updated_ts", 0.0))
+        return _saved_number(self.progress.get(book_id, {}).get("updated_ts", 0.0), "updated_ts")
+
+    def last_percent(self, book_id: str) -> int:
+        return int(_saved_number(self.progress.get(book_id, {}).get("percent", 0), "percent"))
 
     # ------------------------------------------------------------------ 位置
 
@@ -226,7 +304,8 @@ class Library:
         """(字符偏移, 字号)。没读过从头开始、默认字号。"""
         p = self.progress.get(book.id, {})
         size = p.get("font_size", DEFAULT_FONT_SIZE)
-        return min(max(int(p.get("offset", 0)), 0), book.length), size if size in FONT_SIZES else DEFAULT_FONT_SIZE
+        offset = int(_saved_number(p.get("offset", 0), "offset"))
+        return min(max(offset, 0), book.length), size if size in FONT_SIZES else DEFAULT_FONT_SIZE
 
     def view(self, book: Book, offset: int | None = None, font_size: int | None = None) -> View:
         """偏移所在的那一页（默认当前进度）。"""
@@ -269,9 +348,13 @@ class Library:
         return View(book, v.font_size, ch, page, cp, cp.pages[page].offset)
 
     def move_chapters(self, v: View, delta: int) -> View:
-        """跳到前后第 delta 个有正文的章节的第一页；到头停住。"""
+        """跳到前后第 delta 个有正文的章节的第一页；到头停住。已经是最后一章时往后不动，不退回本章开头。"""
         readable = v.book.readable()
         here = max((i for i, c in enumerate(readable) if c <= v.chapter), default=0)
+        if delta > 0 and here == len(readable) - 1:
+            return v
+        if delta < 0 and v.chapter not in readable:  # 停在尾部空章：往回第一步落在最后一个有正文的章，不是它的前一章
+            here += 1
         target = readable[min(max(here + delta, 0), len(readable) - 1)]
         return self.view(v.book, v.book.chapters[target].start, v.font_size)
 
@@ -281,13 +364,20 @@ class Library:
         size = FONT_SIZES[min(max(i + steps, 0), len(FONT_SIZES) - 1)]
         return self.view(v.book, v.offset, size)
 
-    def set_display(self, display: Display) -> None:
-        with self._updating() as progress:
-            progress[DISPLAY_KEY] = {
-                "weight": display.weight,
-                "brightness": display.brightness,
-                "spacing": display.spacing,
-            }
+    def set_display(
+        self,
+        *,
+        weight: int | None = None,
+        brightness: int | None = None,
+        spacing: int | None = None,
+        pace: int | None = None,
+        optics: int | None = None,
+    ) -> None:
+        """只存给出的几项，别的留给文件里最新的值：整组写回会盖掉另一个实例刚存的设置。"""
+        shown = {"weight": weight, "brightness": brightness, "spacing": spacing}
+        text = {"pace": pace, "optics": optics}
+        changes = {key: {k: v for k, v in part.items() if v is not None} for key, part in ((DISPLAY_KEY, shown), (TEXT_KEY, text))}
+        self._store({key: value for key, value in changes.items() if value})
 
     def page_settings(self, book: Book) -> dict[str, int]:
         """页面 dataSource 的 ``s``：当前显示设置，设置面板要显示这些值。o 是遮罩透明度，亮度每档差 25。"""
@@ -304,16 +394,18 @@ class Library:
         """把地址里保存的设置值用上。0 和不认识的值当没改；同一个值重复来不算改动。"""
         font, weight, brightness, spacing = saved
         d = self.display
-        new = Display(
-            weight - 1 if 1 <= weight <= len(WEIGHTS) else d.weight,
-            brightness if brightness in BRIGHTNESS_LEVELS else d.brightness,
-            spacing if spacing in LINE_SPACINGS else d.spacing,
-        )
+        changes: dict[str, int] = {}
+        if 1 <= weight <= len(WEIGHTS) and weight - 1 != d.weight:
+            changes["weight"] = weight - 1
+        if brightness in BRIGHTNESS_LEVELS and brightness != d.brightness:
+            changes["brightness"] = brightness
+        if spacing in LINE_SPACINGS and spacing != d.spacing:
+            changes["spacing"] = spacing
         size = font if font in FONT_SIZES else v.font_size
-        if new == d and size == v.font_size:
+        if not changes and size == v.font_size:
             return v, False
-        if new != d:
-            self.set_display(new)
+        if changes:
+            self.set_display(**changes)
         v = self.view(book, v.offset, size)
         self.save(v)
         return v, True
@@ -355,14 +447,18 @@ class Library:
         with self._lock:
             key = (book.id, session)
             last = self._sessions.get(key)
-            self._sessions[key] = tuple(map(max, counters, last)) if last else counters
+            opened = last[-1] if last else self.display.brightness  # 第一次请求紧跟在打开之后，这就是页面拿到的 s.b
+            self._sessions[key] = (*(map(max, counters, last) if last else counters), *saved, opened)
             self._sessions.move_to_end(key)
             while len(self._sessions) > MAX_SESSIONS:
                 self._last_turn.pop(self._sessions.popitem(last=False)[0], None)
-            v, adjusted = self._apply_saved(book, self.view(book), saved)
             if last is None:
-                return v, "baseline"
-            nxt, prv, nch, pch, auto = (max(0, c - old) for c, old in zip(counters, last, strict=True))
+                return self.view(book), "baseline"
+            font, weight, brightness, spacing = (new if new != old else 0 for new, old in zip(saved, last[size:-1], strict=True))
+            if brightness == opened and not last[size + SETTING_NAMES.index("brightness")]:
+                brightness = 0  # 亮度面板只能单击退出，退出就写地址，没调也写：页面拿到的旧值不能盖掉文字版后来改的
+            v, adjusted = self._apply_saved(book, self.view(book), (font, weight, brightness, spacing))
+            nxt, prv, nch, pch, auto = (max(0, c - old) for c, old in zip(counters, last[:size], strict=True))
             if self.swap_swipe:
                 nxt, prv = prv, nxt
             manual = bool(nxt or prv or nch or pch or adjusted)
@@ -410,10 +506,15 @@ class Library:
     def _refresh(self) -> None:
         with self._lock:
             stamp = self._file_stamp()
-            if stamp != self._stamp:
-                self._stamp = stamp
+            if stamp == self._stamp:
+                return
+            try:
                 self._progress = self._load_progress()
-                self._display = self._load_display()
+            except OSError as exc:  # 留着内存里这份，stamp 不动，下次访问再读
+                log.warning("进度文件 %s 读不了：%s", self.state_file, exc)
+                return
+            self._stamp = stamp
+            self._display = self._load_display()
 
     @contextmanager
     def _updating(self) -> Iterator[dict[str, dict[str, Any]]]:
@@ -421,52 +522,108 @@ class Library:
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         with self._lock, open(self.state_file.with_name(self.state_file.name + ".lock"), "a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            self._progress = self._load_progress()
+            self._progress = self._load_progress(quarantine=True)
             yield self._progress
-            tmp = self.state_file.with_name(self.state_file.name + ".tmp")
-            tmp.write_text(json.dumps(self._progress, ensure_ascii=False, indent=2), encoding="utf-8")
-            os.replace(tmp, self.state_file)
+            text = json.dumps(self._progress, ensure_ascii=False, indent=2)
+            _write_atomic(self.state_file, text)
             self._stamp = self._file_stamp()
             self._display = self._load_display()
+            _write_atomic(self.backup_file, text)  # 不是硬链接：外面把文件改坏时备份不能跟着坏
 
-    def save(self, v: View) -> None:
+    def _store(self, changes: dict[str, dict[str, Any]]) -> None:
+        """改进度文件里的几项，这几项里不认识的键留着：另一个实例可能比这边新。
+
+        写不进去（磁盘满、没权限）只记日志，这个进程里照样用新值：翻页不能因此断掉。
+        """
+        def merge(progress: dict[str, dict[str, Any]]) -> None:
+            for key, value in changes.items():
+                progress[key] = {**progress.get(key, {}), **value}
+
+        try:
+            with self._updating() as progress:
+                merge(progress)
+        except OSError as exc:
+            log.error("进度写不进 %s：%s", self.state_file, exc)
+            with self._lock:
+                merge(self._progress)
+                self._display = self._load_display()
+
+    def save(self, v: View) -> float:
+        """存这本书的位置，返回写进文件的时间。写完再读文件，读到的可能已经是另一个实例的了。"""
         book = v.book
         entry = self._entries.get(book.id)
-        with self._updating() as progress:
-            progress[book.id] = {
-                "title": book.title,
-                "file": entry.name if entry else book.path.name,
-                "offset": v.offset,
-                "font_size": v.font_size,
-                "chapter": book.chapters[v.chapter].title,
-                "chapter_index": v.chapter,
-                "page": v.page + 1,
-                "pages": len(v.pages.pages),
-                "percent": book.percent(v.offset),
-                "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "updated_ts": time.time(),
-            }
+        now = time.time()
+        self._store({book.id: {
+            "title": book.title,
+            "file": entry.name if entry else book.path.name,
+            "offset": v.offset,
+            "font_size": v.font_size,
+            "chapter": book.chapters[v.chapter].base_title,
+            "chapter_index": v.chapter,
+            "page": v.page + 1,
+            "pages": len(v.pages.pages),
+            "percent": book.percent(v.offset),
+            "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_ts": now,
+        }})
+        return now
 
-    def _load_progress(self) -> dict[str, dict[str, Any]]:
+    def _load_progress(self, *, quarantine: bool = False) -> dict[str, dict[str, Any]]:
+        """读进度文件。文件坏了就用 :meth:`_recovered`，要写回时（quarantine）先把坏文件抄一份，别的书的进度还能手工救回来。
+
+        只抄不挪，等新文件原子替换它：挪走之后到写好之前没有文件，另一个实例这时读到的是“从头开始”，
+        翻一页就把位置写回书头；写入方死在这时，下次启动也用不上备份。
+
+        OSError 往上抛：不知道文件里是什么，不能写回去。
+        """
         try:
-            data = json.loads(self.state_file.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return {}
-        except (OSError, ValueError) as exc:
-            log.warning("进度文件 %s 读不了（%s），从空进度开始；原文件保留不动", self.state_file, exc)
-            return {}
-        return {k: v for k, v in data.items() if isinstance(v, dict)} if isinstance(data, dict) else {}
+            return _read_progress(self.state_file)
+        except FileNotFoundError:  # 一直没有文件时，内存里的是还没写进去的进度
+            return self._progress if self._stamp is None else {}
+        except ValueError as exc:
+            bad = self._file_stamp()
+            if quarantine and bad != self._kept_bad:
+                stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2)}"  # 同一秒坏两次也不能互相盖掉
+                kept = self.state_file.with_name(f"{self.state_file.name}.corrupt-{stamp}")
+                shutil.copyfile(self.state_file, kept)
+                self._kept_bad = bad
+                log.error("进度文件坏了（%s），留了一份在 %s，用备份和内存里的进度接着写", exc, kept)
+            else:
+                log.warning("进度文件 %s 坏了（%s），先用备份和内存里的进度，下次保存时替换", self.state_file, exc)
+            return self._recovered()
+
+    def _recovered(self) -> dict[str, dict[str, Any]]:
+        """文件坏了时最新的进度。内存可能是旧的（另一个实例写过，这边没读过）或空的（刚重启），备份是上一次写入的全部内容；
+        内存也可能更新（备份写失败了）。书取 updated_ts 新的那份，显示设置没有时间，取备份。
+        """
+        try:
+            backup = _read_progress(self.backup_file)
+        except (OSError, ValueError):
+            return self._progress
+
+        def written_at(record: dict[str, Any]) -> float:
+            return _saved_number(record.get("updated_ts", 0.0), "updated_ts")
+
+        merged = dict(self._progress)
+        for key, record in backup.items():
+            if written_at(record) >= written_at(merged.get(key, {})):
+                merged[key] = record
+        return merged
 
     def _load_display(self) -> Display:
         """进度文件里的显示设置；不认识的值（手改过、档位变了）退回默认。"""
         p = self._progress.get(DISPLAY_KEY, {})
         weight, brightness, spacing = p.get("weight"), p.get("brightness"), p.get("spacing")
+        text = self._progress.get(TEXT_KEY, {})
+        pace, optics = text.get("pace", p.get("pace")), text.get("optics")  # 速度以前存在 _display 里
         if isinstance(brightness, int):  # 亮度以前的档位不是整十
             brightness = min(max(round(brightness / 10) * 10, 10), 100)
         return Display(
             weight if weight in range(len(WEIGHTS)) else DEFAULT_WEIGHT,
             brightness if brightness in BRIGHTNESS_LEVELS else 100,
             spacing if spacing in LINE_SPACINGS else DEFAULT_SPACING,
+            pace if pace in PACES else DEFAULT_PACE,
+            optics if optics in OPTICS_LEVELS else DEFAULT_OPTICS,
         )
 
     # ------------------------------------------------------------------ 页图

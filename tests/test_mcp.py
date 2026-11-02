@@ -13,14 +13,17 @@ import contextlib
 import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, TypeVar
 
 import httpx2
+import pytest
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from starlette.applications import Starlette
 
+from glassreader.book import Book
 from glassreader.config import Settings
 from glassreader.library import Library
 from glassreader.mcp_tools import TOOL_NAMES, ReaderTools, build_mcp_server
@@ -194,6 +197,54 @@ def test_single_book_opens_without_title(tmp_path: Path, books_dir: Path) -> Non
     assert out["success"] and out["title"] == "雾港来信"
 
 
+def test_unreadable_book_says_so(books_dir: Path, state_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def denied(*_: Any, **__: Any) -> None:
+        raise PermissionError("没有权限")
+
+    t = tools_for(books_dir, state_file)
+    monkeypatch.setattr(Book, "load", denied)
+    out = t.open_book("雾港来信")
+    assert not out["success"] and out["message"] == "《雾港来信》的文件打不开了"
+
+
+def test_opening_keeps_a_position_inside_an_image_page(books_dir: Path, state_file: Path) -> None:
+    t = tools_for(books_dir, state_file)
+    t.open_book("测试长篇")
+    lib = t.library
+    book = lib.book(lib.find("测试长篇")[0].id)
+    v = lib.view(book, book.chapters[2].start)
+    lib.save(replace(v, offset=v.offset + 7))  # 文字版的页首
+    t.open_book("测试长篇")
+    assert lib.position(book)[0] == v.offset + 7
+    assert lib.view(book).offset == v.offset  # 页图版读的时候自己对齐到页首
+
+
+def test_continue_knows_a_book_only_the_other_instance_scanned(books_dir: Path, state_file: Path) -> None:
+    image, text = (ReaderTools(make_settings(books_dir, state_file), Library(books_dir, state_file)) for _ in range(2))
+    assert image.open_book("雾港来信")["success"]
+    (books_dir / "后来放进来的.txt").write_text("第一章 甲\n正文。\n", encoding="utf-8")
+    assert text.open_book("后来放进来的")["success"]
+    assert image.reading_status()["title"] == "后来放进来的"
+    assert image.open_book()["title"] == "后来放进来的"  # 不能打开旧书，也不能把旧书写成最近阅读
+    assert text.library.recent().title == "后来放进来的"
+
+
+def test_exact_title_beats_a_prefix_match_the_other_instance_knows_first(books_dir: Path, state_file: Path) -> None:
+    image, text = (ReaderTools(make_settings(books_dir, state_file), Library(books_dir, state_file)) for _ in range(2))
+    (books_dir / "雾港.txt").write_text("第一章 甲\n正文。\n", encoding="utf-8")
+    assert text.open_book("雾港")["title"] == "雾港"
+    assert image.open_book("雾港")["title"] == "雾港"  # 这边的词条里只有《雾港来信》，开头相同也算命中
+
+
+def test_continue_ignores_a_recent_book_that_was_deleted(books_dir: Path, state_file: Path) -> None:
+    tools = ReaderTools(make_settings(books_dir, state_file), Library(books_dir, state_file))
+    assert tools.open_book("雾港来信")["success"]
+    time.sleep(0.01)
+    assert tools.open_book("测试长篇")["success"]
+    (books_dir / "测试长篇.txt").unlink()
+    assert tools.open_book()["title"] == "雾港来信"
+
+
 def test_status_of_unread_book(books_dir: Path, state_file: Path) -> None:
     t = tools_for(books_dir, state_file)
     out = t.reading_status("雾港来信")
@@ -209,6 +260,44 @@ def test_list_books_message_and_order(books_dir: Path, state_file: Path) -> None
     assert out["count"] == 8 and out["books"][0]["title"] == "雾港来信"
     assert out["message"].startswith("书架上有8本：《雾港来信》读到0%、") and out["message"].endswith("等")
     assert t.list_books("书3")["books"] == [{"title": "书3", "chapter": "", "percent": 0, "last_read": ""}]
+
+
+def test_split_chapters_are_read_without_their_number(books_dir: Path, state_file: Path) -> None:
+    para = "风从海上吹来。" * 100
+    text = ["第一章 风起", "短。", "第二章 夜渡", *[para] * 100, "第三章 归来", "短。"]
+    (books_dir / "超长章.txt").write_text("\n".join(text), encoding="utf-8")
+    tools = ReaderTools(make_settings(books_dir, state_file), Library(books_dir, state_file))
+    book = tools.library.book(tools.library.find("超长章")[0].id)
+    assert [c.title for c in book.chapters] == ["第一章 风起", "第二章 夜渡 1", "第二章 夜渡 2", "第三章 归来"]
+    first = tools.jump("超长章", chapter="第二章")
+    assert (first["message"], first["chapter"], first["chapter_index"]) == ("已跳到第二章 夜渡", "第二章 夜渡", 2)
+    second = tools.jump("超长章", chapter="下一章")  # 下一章按切开后的段走（research §5）
+    assert (second["message"], second["chapter"], second["chapter_index"]) == ("已跳到第二章 夜渡", "第二章 夜渡", 3)
+    assert tools.jump("超长章", percent=80)["message"].endswith("，第二章 夜渡")
+    assert tools.open_book("超长章")["message"] == "已打开《超长章》，第二章 夜渡"
+    status = tools.reading_status("超长章")
+    assert status["message"].startswith("《超长章》读到第二章 夜渡，") and status["chapter"] == "第二章 夜渡"
+    assert tools.list_books("超长章")["books"][0]["chapter"] == "第二章 夜渡"
+    assert tools.jump("超长章", chapter="下一章")["chapter"] == "第三章 归来"
+
+
+@pytest.mark.parametrize("query", ["。", "...", "《。》"])
+def test_punctuation_alone_finds_no_book(books_dir: Path, state_file: Path, query: str) -> None:
+    tools = ReaderTools(make_settings(books_dir, state_file), Library(books_dir, state_file))
+    assert tools.open_book("雾港来信")["success"]
+    assert tools.open_book(query)["error"] == "book not found"
+    assert tools.reading_status(query)["success"] is False
+    assert tools.list_books(query)["count"] == 0
+
+
+@pytest.mark.parametrize("bad", ["x", None, [1], float("nan")])
+def test_list_books_survives_a_bad_percent(books_dir: Path, state_file: Path, bad: Any) -> None:
+    tools = ReaderTools(make_settings(books_dir, state_file), Library(books_dir, state_file))
+    assert tools.open_book("雾港来信")["success"]
+    data = json.loads(state_file.read_text(encoding="utf-8"))
+    next(v for v in data.values() if v.get("title") == "雾港来信")["percent"] = bad
+    state_file.write_text(json.dumps(data), encoding="utf-8")
+    assert [b["percent"] for b in tools.list_books("雾港来信")["books"]] == [0]
 
 
 def test_page_prefix_uses_public_url(books_dir: Path, state_file: Path) -> None:

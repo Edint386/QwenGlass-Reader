@@ -143,7 +143,61 @@ def test_cloud_site_matches_compose_and_serves_only_glassreader_paths() -> None:
     assert re.findall(r"location\s+(?:=|\^~)?\s*(\S+)\s*\{", site) == ["/healthz", "/r/", MCP_PATH, "/"]
 
 
+def test_cloud_key_path_stays_out_of_the_logs() -> None:
+    body = locations(CLOUD / "site.https.conf")["^~ /r/"]
+    assert "access_log off;" in body
+    assert re.search(r"error_log \S+ crit;", body)  # 上游连不上是 error 级别，日志行带完整请求，也就带着 key
+
+
 def test_cloud_image_has_the_fallback_fonts() -> None:
     dockerfile = (CLOUD / "Dockerfile").read_text(encoding="utf-8")
     for package in ("fonts-noto-cjk", "fonts-noto-core", "fonts-dejavu-core", "fonts-unifont"):
         assert package in dockerfile
+
+
+def code_lines(path: Path) -> list[str]:
+    """脚本里的命令，去掉注释。"""
+    return [line for line in path.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#")]
+
+
+def test_cloud_image_keeps_dependencies_in_their_own_layer() -> None:
+    lines = code_lines(CLOUD / "Dockerfile")
+    order = ["ENV UV_COMPILE_BYTECODE=1", "COPY pyproject.toml uv.lock ./",
+             "RUN uv sync --frozen --no-dev --no-install-project", "COPY glassreader ./glassreader",
+             "RUN uv sync --frozen --no-dev --no-editable"]
+    positions = [lines.index(line) for line in order]
+    assert positions == sorted(positions)  # 代码在依赖前面的话，改一行就重装全部依赖
+
+
+def test_push_clears_the_replaced_image_after_the_new_one_is_up() -> None:
+    text = "\n".join(code_lines(CLOUD / "push.sh"))
+    assert text.index("compose") < text.index("sudo docker image prune -f")
+
+
+def test_push_tests_first_and_waits_for_a_healthy_container() -> None:
+    text = "\n".join(code_lines(CLOUD / "push.sh"))
+    assert text.index("uv run pytest -q") < text.index("rsync ")  # 测试不过不发
+    assert "up -d --build --wait --wait-timeout 90" in text  # 只有 up -d 的话，容器起不来也返回成功
+    assert "healthcheck:" in (CLOUD / "compose.yaml").read_text(encoding="utf-8")  # --wait 等的就是它
+
+
+@pytest.mark.skipif(shutil.which("rsync") is None, reason="需要 rsync")
+def test_book_sync_takes_txt_in_any_case(tmp_path: Path) -> None:
+    filters = re.findall(r"--(?:in|ex)clude='[^']+'", "\n".join(code_lines(CLOUD / "sync_books.sh")))
+    source, target = tmp_path / "source", tmp_path / "target"
+    (source / "子目录").mkdir(parents=True)
+    target.mkdir()
+    for name in ("小写.txt", "大写.TXT", "混合.Txt", "子目录/书.tXt", "封面.jpg", "笔记.md"):
+        (source / name).write_text("正文", encoding="utf-8")
+    subprocess.run(["rsync", "-rt", *(f.replace("'", "") for f in filters), f"{source}/", f"{target}/"], check=True)
+    assert sorted(p.name for p in target.rglob("*") if p.is_file()) == sorted(["小写.txt", "大写.TXT", "混合.Txt", "书.tXt"])
+
+
+def test_book_sync_leaves_the_books_readable_by_the_container() -> None:
+    lines = code_lines(CLOUD / "sync_books.sh")
+    assert lines[-1] == 'ssh "$HOST" "sudo chmod -R a+rX /opt/glassreader/books"'  # rsync 之后，新文件沿用源文件权限
+
+
+@pytest.mark.parametrize("script", ["push.sh", "sync_books.sh"])
+def test_cloud_scripts_parse(script: str) -> None:
+    subprocess.run(["bash", "-n", str(CLOUD / script)], check=True)

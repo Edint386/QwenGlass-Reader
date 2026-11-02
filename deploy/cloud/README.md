@@ -13,7 +13,7 @@
 | `/opt/glassreader/compose.yaml` | 容器定义：只监听回环、只读根文件系统、内存上限 256 MB、开机自启 |
 | `/opt/glassreader/.env` | `READER_TOKEN`、`READER_KEY`、`READER_PUBLIC_URL`，0600 |
 | `/opt/glassreader/books/` | 书库，容器里只读 |
-| `/opt/glassreader/data/progress.json` | 阅读进度 |
+| `/opt/glassreader/data/progress.json` | 阅读进度。旁边的 `progress.json.bak` 是最近一次写入的备份 |
 | `/opt/glassreader/letsencrypt/` | certbot 的账号和证书 |
 | `/opt/1panel/apps/openresty/openresty/conf/conf.d/reader.example.com.conf` | 站点配置，由 `site.http.conf` + `site.https.conf` 拼成 |
 | `glassreader-cert-renew.timer` | 每周检查一次证书续期，证书路径同上面的站点目录 `ssl/` |
@@ -28,13 +28,15 @@
 deploy/cloud/sync_books.sh
 ```
 
-把 `~/Books` 里的 TXT 传上去，只增改，不删云端的书。传完不用重启。
+把 `~/Books` 里的 TXT 传上去，扩展名不分大小写，只增改，不删云端的书。传完把权限放开给容器用户，不用重启。
 
 ```bash
 deploy/cloud/push.sh
 ```
 
-发布代码并重建容器，不碰 `.env`、书库和进度。
+先跑测试，不过就不发。然后发布代码、重建容器，等到健康检查通过才算成功，正常约 30 秒，90 秒等不到就报错退出。最后清掉被替换的旧镜像（`docker image prune` 清的是全机的悬空镜像）。不碰 `.env`、书库和进度。
+
+报错退出时坏版本已经在服务器上了，容器在反复重启。切回上一个提交再运行一次就是回滚。
 
 ```bash
 ssh ubuntu@server.example.com sudo docker logs --tail 50 -f glassreader
@@ -64,5 +66,7 @@ ssh ubuntu@server.example.com sudo docker logs --tail 50 -f glassreader
 
 ## 注意
 
+- **站点配置要手工同步**：`push.sh` 不发布 `site.http.conf`、`site.https.conf`，线上那份是手工装的。改了这两个文件，要自己同步到服务器上的站点配置，`openresty -t` 通过后 reload，否则不生效。线上文件比这两个文件多 Agent 文字版实例的 `upstream glassreader_text` 和三个 `/text/` 位置（见 agent 分支的 README），所以只手工改动过的行，不要整份覆盖，否则 `/text/` 全部变成 404。
+- **和文字版实例同一次发布**：Agent 文字版在 agent 分支，和这里共用 `progress.json`。两个分支要连着各运行一次 `push.sh`，回滚也两边一起。只升一边时，旧版不写 `progress.json.bak`，备份停在升级前，文件损坏后显示设置退回旧值，重启过的新实例位置也退回旧值；旧版保存时还会盖掉新版刚改的设置。
 - **字体**：Linux 上用 Noto Sans CJK，比 Mac 上的冬青黑体略粗，字宽相同。分页结果可能和 Mac 不同，但进度存的是字符位置，不受影响。主字体没有的字（颜文字里的泰文、彝文、组合符号等）逐字换 `FALLBACK_FONTS` 里的字体画，用到的包都在 `Dockerfile` 里。
 - **加书还要电脑**：目前只有 `sync_books.sh` 这一条路。
