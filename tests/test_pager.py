@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from collections import defaultdict
 from pathlib import Path
 
 import pytest
@@ -53,6 +54,28 @@ def test_wrap_keeps_text_and_rules(size: int) -> None:
         room = layout.text_width - (indent if line.indent else 0)
         body = line.text.rstrip("".join(NO_LINE_START))
         assert sum(widths[c] for c in body) <= room + 0.5
+
+
+@pytest.mark.parametrize(("text", "limit", "indent", "expected"), [
+    ("字字字字字。后", 120, 0, ["字字字字字。", "后"]),  # 挂得下
+    ("字字字字字。后", 110, 0, ["字字字字", "字。后"]),
+    ("字字字字字。”后", 120, 0, ["字字字字", "字。”后"]),  # 两个标点不能拆开
+    ("字字字“字。后", 110, 0, ["字字字", "“字。后"]),  # 引号也不能留在行尾
+    ("字字字字！！后", 110, 0, ["字字字", "字！！后"]),
+    ("字字字。后", 110, 40, ["字字", "字。后"]),  # 首行缩进后可用的宽度也少了
+    ("字字字字字。后", None, 0, ["字字字字字。", "后"]),  # 不传就照旧悬挂
+    ("字字字字字。”后", None, 0, ["字字字字字。”", "后"]),
+])
+def test_wrap_limit_keeps_hanging_punctuation_inside(text: str, limit: float | None, indent: float, expected: list[str]) -> None:
+    widths = defaultdict(lambda: 20.0)
+    assert [line.text for line in wrap(text, 0, 100, widths, indent, limit)] == expected
+
+
+def test_wrap_limit_with_nothing_but_punctuation_still_makes_progress() -> None:
+    widths = defaultdict(lambda: 20.0)
+    lines = wrap("！" * 23, 0, 100, widths, 0, 110)
+    assert "".join(line.text for line in lines) == "！" * 23
+    assert all(len(line.text) <= 5 for line in lines)
 
 
 def test_wrap_short_paragraph_is_one_last_line() -> None:

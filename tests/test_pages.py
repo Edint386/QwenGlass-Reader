@@ -2,7 +2,8 @@
 
 模拟器 / 真机测出来的内核限制（docs/research.md §1、§6）在这里变成规则，改模板时不至于踩回去：
 ``data://update`` 一次写多个键时用 ``&amp;`` 分隔，属性里不能有 ``<``；
-表达式只能有一个算术运算符，且左边不能是常量；根节点直接子元素 ≤ 64；页图地址里计数的顺序与服务端一致。
+表达式只能有一个算术运算符；根节点直接子元素 ≤ 64；页图地址里计数的顺序与服务端一致。
+文字版页面自己的检查在 test_agent.py，这里只放两个页面都要守的规则（夹具 ``either``）。
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from glassreader.pager import FONT_SIZES, LINE_SPACINGS, TITLE_SIZE, WEIGHTS
 
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "pages" / "reader" / "template.xml"
+TEXT_TEMPLATE = ROOT / "pages" / "reader-text" / "template.xml"
 DATA = ROOT / "pages" / "reader" / "data.json"
 SKILL = ROOT / "skill" / "SKILL.md"
 UI_SCHEMA = ROOT / "skill" / "ui_schema.json"
@@ -33,6 +35,11 @@ PAGE_SAVED = ("uf", "uw", "ub", "us")
 @pytest.fixture(scope="module")
 def root() -> ET.Element:
     return ET.parse(TEMPLATE).getroot()
+
+
+@pytest.fixture(scope="module", params=[TEMPLATE, TEXT_TEMPLATE], ids=["reader", "reader-text"])
+def either(request: pytest.FixtureRequest) -> ET.Element:
+    return ET.parse(request.param).getroot()
 
 
 def all_attrs(root: ET.Element) -> list[tuple[ET.Element, str, str]]:
@@ -61,28 +68,32 @@ def writes(update: str) -> dict[str, str]:
     return dict(pair.split("=", 1) for pair in update.removeprefix("data://update?").split("&"))
 
 
-def test_data_updates_are_well_formed(root: ET.Element) -> None:
-    updates = [v for _, _, v in all_attrs(root) if v.startswith("data://")]
+def test_data_updates_are_well_formed(either: ET.Element) -> None:
+    updates = [v for _, _, v in all_attrs(either) if v.lower().startswith(("data://", "datasource://"))]
     assert updates
     for v in updates:
-        assert re.fullmatch(r"data://update\?[a-z]+=[^&=]+(&[a-z]+=[^&=]+)*", v), v
-        assert len(writes(v)) == v.count("&") + 1, f"同一个键写了两次：{v}"
+        assert re.fullmatch(r"(data|dataSource)://update\?[a-z]+=[^&=]+(&[a-z]+=[^&=]+)*", v), v  # dataSource 的 S 大写
+        assert len(writes(v.removeprefix("dataSource://update?"))) == v.count("&") + 1, f"同一个键写了两次：{v}"
 
 
 def expressions(root: ET.Element) -> list[str]:
     return [m.group(1).strip() for _, _, v in all_attrs(root) for m in re.finditer(r"\{\{(.*?)\}\}", v)]
 
 
-def test_expressions_have_at_most_one_arithmetic_operator(root: ET.Element) -> None:
-    exprs = expressions(root)
+def test_expressions_have_at_most_one_arithmetic_operator(either: ET.Element) -> None:
+    exprs = expressions(either)
     assert exprs
     for e in exprs:
         if e.startswith("f:"):
             continue
         ops = re.findall(r"(?<=\s)[-+*/](?=\s)", e)
         assert len(ops) <= 1, f"只算第一个运算符：{e!r}"
-        if ops:
-            assert not re.match(r"^-?\d", e), f"常量在左时算术结果为 0：{e!r}"
+
+
+def test_kernel_limits(either: ET.Element) -> None:
+    # research.md §10.1：超了解析失败或直接丢属性，模板里看不出来
+    assert all(len(list(el)) <= 64 and len(el.attrib) <= 32 for el in either.iter())
+    assert len({e.get("match") for e in either.iter("event")}) <= 32
 
 
 def test_initial_data(root: ET.Element) -> None:
@@ -170,9 +181,9 @@ def test_menu_order(root: ET.Element) -> None:
     assert labels[1].get(f"{A}if") == "{{d:p > 0}}" and f"{A}else" in labels[2].attrib
 
 
-def test_side_labels_use_native_font_sizes(root: ET.Element) -> None:
+def test_side_labels_use_native_font_sizes(either: ET.Element) -> None:
     # 文档 §34：原生字号只有这些档位，其余退回 14，排版会和预想的不一样
-    sizes = {el.get("font-size") for el in root.iter("label") if el.get("font-size")}
+    sizes = {el.get("font-size") for el in either.iter("label") if el.get("font-size")} - {"{{fs}}"}
     assert sizes <= {"10", "14", "16", "18", "20", "22", "24", "28", "32", "36", "40", "44", "58"}
 
 

@@ -213,8 +213,13 @@ class ChapterPages:
         return max(0, bisect.bisect_right(self._starts, offset) - 1)
 
 
-def wrap(text: str, offset: int, width: float, widths: dict[str, float], indent_px: float) -> list[Line]:
-    """贪心断行 + 禁则：行首禁则字符悬挂到上一行行尾（最多两个连续标点，如“。”），行尾禁则字符推到下一行。"""
+def wrap(
+    text: str, offset: int, width: float, widths: dict[str, float], indent_px: float, limit: float | None = None
+) -> list[Line]:
+    """贪心断行 + 禁则：行首禁则字符悬挂到上一行行尾（最多两个连续标点，如“。”），行尾禁则字符推到下一行。
+
+    ``limit`` 是悬挂后的行宽上限：挂上去超过它就不挂，把上一个字带到下一行，标点跟着它走。
+    """
     lines: list[Line] = []
     start, cur, avail = 0, 0.0, width - indent_px
     i, n = 0, len(text)
@@ -226,6 +231,11 @@ def wrap(text: str, offset: int, width: float, widths: dict[str, float], indent_
                 cut = i + 1
                 if cut < n and text[cut] in NO_LINE_START:
                     cut += 1
+                if limit is not None and cur + sum(widths[c] for c in text[i:cut]) > avail + limit - width:
+                    cut = i - 1
+                    while cut > start and (text[cut] in NO_LINE_START or text[cut - 1] in NO_LINE_END):
+                        cut -= 1
+                    cut = cut if cut > start else i  # 整行都是标点，退无可退，只能让标点开头
             elif text[cut - 1] in NO_LINE_END and cut - 1 > start:
                 cut -= 1
             # 悬挂标点可能正好吃掉段尾：这一行就是段末行，不能两端对齐

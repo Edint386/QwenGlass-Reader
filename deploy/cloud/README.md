@@ -13,7 +13,7 @@
 | `/opt/glassreader/compose.yaml` | 容器定义：只监听回环、只读根文件系统、内存上限 256 MB、开机自启 |
 | `/opt/glassreader/.env` | `READER_TOKEN`、`READER_KEY`、`READER_PUBLIC_URL`，0600 |
 | `/opt/glassreader/books/` | 书库，容器里只读 |
-| `/opt/glassreader/data/progress.json` | 阅读进度 |
+| `/opt/glassreader/data/progress.json` | 阅读进度。旁边的 `progress.json.bak` 是最近一次写入的备份 |
 | `/opt/glassreader/letsencrypt/` | certbot 的账号和证书 |
 | `/opt/1panel/apps/openresty/openresty/conf/conf.d/reader.example.com.conf` | 站点配置，由 `site.http.conf` + `site.https.conf` 拼成 |
 | `glassreader-cert-renew.timer` | 每周检查一次证书续期，证书路径同上面的站点目录 `ssl/` |
@@ -28,13 +28,15 @@
 deploy/cloud/sync_books.sh
 ```
 
-把 `~/Books` 里的 TXT 传上去，只增改，不删云端的书。传完不用重启。
+把 `~/Books` 里的 TXT 传上去，扩展名不分大小写，只增改，不删云端的书。传完把权限放开给容器用户，不用重启。
 
 ```bash
 deploy/cloud/push.sh
 ```
 
-发布代码并重建容器，不碰 `.env`、书库和进度。
+先跑测试，不过就不发。然后发布代码、重建容器，等到健康检查通过才算成功，正常约 30 秒，90 秒等不到就报错退出。最后清掉被替换的旧镜像（`docker image prune` 清的是全机的悬空镜像）。不碰 `.env`、书库和进度。
+
+报错退出时坏版本已经在服务器上了，容器在反复重启。切回上一个提交再运行一次就是回滚。
 
 ```bash
 ssh ubuntu@server.example.com sudo docker logs --tail 50 -f glassreader
@@ -57,7 +59,18 @@ ssh ubuntu@server.example.com sudo docker logs --tail 50 -f glassreader
 
 两个进程同时写同一个文件靠 `progress.json.lock` 的文件锁，写之前先读最新内容，所以共用目录必须在同一台机器的本地磁盘上。
 
-`push.sh` 发布当前分支的工作目录，所以运行前先看清在哪个分支上。`.env` 从页图版复制，`READER_PUBLIC_URL` 改成 `https://reader.example.com/text`，别的不变。站点配置要有 `upstream glassreader_text` 和三个 `/text/` 位置，`site.https.conf` 里都写好了。
+`push.sh` 发布当前分支的工作目录，所以运行前先看清在哪个分支上。
+
+**main 和 agent 要同一次发布，回滚也两边一起。** `push.sh` 一次只发一个分支，所以两个分支连着各运行一次。两边共用 `progress.json`，只升一边时：
+
+- 旧版不写 `progress.json.bak`，备份停在升级前。文件损坏后显示设置取备份，亮度、粗细这些退回旧值；重启过的新实例内存是空的，位置也退回旧值。
+- 旧版保存时还是整组写回：页图版翻页用地址里的旧亮度盖掉文字版刚改的，文字版存速度用页面上的亮度盖掉页图版刚改的。
+
+回滚一边时备份同样会变旧。
+
+**回滚文字版服务要把平台上的页面一起回滚。** 现在的 `reader-text` 页面要服务发当前槽 `i`、查表用的数组（`nx`、`pv`、`mn` 等）和章节名 `hd`：配旧服务时正文是空的，翻页、菜单移动都不动。发布顺序相反：先发服务，再存页面和 `data.json`。这几分钟里旧页面滑动照常，章节名不更新，听书、智能翻页和语音翻页不会翻过去。
+
+`.env` 从页图版复制，`READER_PUBLIC_URL` 改成 `https://reader.example.com/text`，别的不变。站点配置要有 `upstream glassreader_text` 和三个 `/text/` 位置，`site.https.conf` 里都写好了。
 
 ## 从零部署
 
@@ -81,5 +94,6 @@ ssh ubuntu@server.example.com sudo docker logs --tail 50 -f glassreader
 
 ## 注意
 
+- **站点配置要手工同步**：`push.sh` 不发布 `site.http.conf`、`site.https.conf`，线上那份是手工装的。改了这两个文件，要自己同步到服务器上的站点配置，`openresty -t` 通过后 reload，否则不生效。
 - **字体**：Linux 上用 Noto Sans CJK，比 Mac 上的冬青黑体略粗，字宽相同。分页结果可能和 Mac 不同，但进度存的是字符位置，不受影响。主字体没有的字（颜文字里的泰文、彝文、组合符号等）逐字换 `FALLBACK_FONTS` 里的字体画，用到的包都在 `Dockerfile` 里。
 - **加书还要电脑**：目前只有 `sync_books.sh` 这一条路。

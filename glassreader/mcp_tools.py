@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Annotated, Any, Required, TypedDict
 
 import anyio
@@ -127,8 +128,9 @@ class ReaderTools:
     def _pick(self, title: str) -> tuple[Entry | None, BookResult | None]:
         """按书名选书；title 为空 = 最近读的那本。找不到时第二项是可以直接返回的失败结果。"""
         lib = self.library
+        lib.scan()  # 书架词条留在各进程内存里，进度却是共用的：另一个实例读的新书这边不认得，就会打开错书还写成最近阅读
         if title.strip():
-            found = lib.find(title)
+            found = lib.find(title, rescan=False)
             if found:
                 return found[0], None
             names = [e.title for e in lib.find("")][:5]
@@ -166,7 +168,7 @@ class ReaderTools:
             "t": book.title,
             "s": self.library.page_settings(book),
             "title": book.title,
-            "chapter": book.chapters[v.chapter].title,
+            "chapter": book.chapters[v.chapter].base_title,
             "chapter_index": v.chapter + 1,
             "chapters": len(book.chapters),
             "page": v.page + 1,
@@ -195,7 +197,7 @@ class ReaderTools:
             items.append({
                 "title": e.title,
                 "chapter": str(p.get("chapter", "")),
-                "percent": int(p.get("percent", 0)),
+                "percent": lib.last_percent(e.id),
                 "last_read": str(p.get("updated", "")),
             })
         if not entries:
@@ -217,9 +219,10 @@ class ReaderTools:
         if isinstance(book, dict):
             return book
         fresh = entry.id not in self.library.progress
-        v = self.library.view(book)
+        # view 的偏移是页图版的页首，文字版的页不一定这么分：存原来的字，不然重开就往回退
+        v = replace(self.library.view(book), offset=self.library.position(book)[0])
         self.library.save(v)  # 记一次“最近阅读”，下次说“继续看”就是这本
-        where = "从头开始" if fresh else book.chapters[v.chapter].title
+        where = "从头开始" if fresh else book.chapters[v.chapter].base_title
         return self._book_result(v, f"已打开{_quote(book.title)}，{where}")
 
     def jump(self, title: Any = "", chapter: Any = "", percent: Any = None, pages: Any = None) -> BookResult:
@@ -248,7 +251,7 @@ class ReaderTools:
                 "candidates": names,
                 "error": "chapter not found",
             }
-        ch_title = book.chapters[v.chapter].title
+        ch_title = book.chapters[v.chapter].base_title
         if chapter_text:
             msg = f"已跳到{ch_title}"
         elif pct is not None:
@@ -269,7 +272,7 @@ class ReaderTools:
         if isinstance(book, dict):
             return {k: v for k, v in book.items() if k in ("success", "message", "error")}  # type: ignore[return-value]
         v = self.library.view(book)
-        ch_title = book.chapters[v.chapter].title
+        ch_title = book.chapters[v.chapter].base_title
         return {
             "success": True,
             "message": f"{_quote(book.title)}读到{ch_title}，全书{book.percent(v.offset)}%",

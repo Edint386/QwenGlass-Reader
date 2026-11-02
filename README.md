@@ -11,7 +11,9 @@
 >
 > 这个分支也带着页图版的代码，下文以页图版为主。文字版的用法、听书和上线步骤见 [docs/agent.md](docs/agent.md)。
 
-电脑端读 TXT、切章分页、把每页渲染成适合绿色光机的图片；眼镜上的 Waft-DSL 页面用镜腿滑动翻页，两侧栏和菜单是原生控件。翻页不经过大模型，页图请求本身就是阅读进度。打开书、换书、跳章、查进度走语音 → 大模型 → MCP 工具。
+页图版：电脑端读 TXT、切章分页、把每页渲染成适合绿色光机的图片；眼镜上的 Waft-DSL 页面用镜腿滑动翻页，两侧栏和菜单是原生控件。翻页不经过大模型，页图请求本身就是阅读进度。打开书、换书、跳章、查进度走语音 → 大模型 → MCP 工具。
+
+Agent 文字版：服务用 WebSocket 把正文当原生文字推给眼镜，不接大模型，语音只认固定说法，还能听书和智能翻页，见 [docs/agent.md](docs/agent.md)。
 
 调研结论、方案比较、真机待验证清单见 [docs/research.md](docs/research.md)。
 
@@ -22,9 +24,10 @@
 | `glassreader/agent.py` | Agent 自定义接入的文字传输版（`docs/agent.md`） |
 | `glassreader/library.py` | 书库扫描、阅读位置（字符偏移 + 字号）、按计数差值翻页、跳转、进度文件 |
 | `glassreader/mcp_tools.py` | MCP 工具 `list_books` / `open_book` / `jump` / `reading_status` |
-| `glassreader/server.py` | HTTP：页图 `/r/<key>/<书>/<会话>/<计数>.png`、MCP `/mcp`（Bearer，无状态） |
+| `glassreader/server.py` | HTTP：页图 `/r/<key>/<书>/<会话>/<计数>.png`、MCP `/mcp`（Bearer，无状态）；Agent 文字版的 WebSocket `/agent`（Bearer） |
 | `glassreader/cli.py` | `glassreader serve` / `books` / `open` |
 | `pages/reader/` | 眼镜阅读页 `template.xml` + Mock 数据 `data.json`（平台 `Pages/reader` 的本地源） |
+| `pages/reader-text/` | Agent 文字版的阅读页，文件同上（平台 `Pages/reader-text` 的本地源） |
 | `skill/` | `SKILL.md`、`ui_schema.json`（平台技能的本地源） |
 | `deploy/cloud/` | 云端运行：Docker 容器、OpenResty 站点、证书续期、发布和传书脚本，见 [deploy/cloud/README.md](deploy/cloud/README.md) |
 | `deploy/` | 之前的 Mac + 隧道方案，留作回滚：OpenResty `/reader/` 分流、第二条隧道、局域网转发器按路径分流，见 [deploy/README.md](deploy/README.md) |
@@ -37,10 +40,10 @@
 
 | 变量 | 说明 |
 |---|---|
-| `READER_TOKEN` | 平台 MCP 插件的 Bearer Token。不填每次启动随机生成（平台插件会失效） |
+| `READER_TOKEN` | 平台 MCP 插件和 Agent 插件共用的 Bearer Token：`/mcp` 和 WebSocket `/agent` 都用它鉴权。不填每次启动随机生成（平台插件会失效） |
 | `READER_KEY` | 页图地址里的随机段：眼镜发不了请求头，页图只能靠路径鉴权 |
 | `READER_PUBLIC_URL` | 眼镜和平台访问的公网根地址，可带路径前缀（反代剥掉前缀后转发），如 `https://cast.example.com/reader`。不填只能本机联调 |
-| `READER_BOOKS_DIR` | TXT 书库目录，递归收集 `*.txt`（默认 `~/Books`） |
+| `READER_BOOKS_DIR` | TXT 书库目录，递归收集 `*.txt`，扩展名不分大小写（默认 `~/Books`） |
 | `READER_STATE_FILE` | 进度文件（默认 `~/Library/Application Support/glassreader/progress.json`） |
 | `READER_HOST` / `READER_PORT` | 监听地址（默认 `127.0.0.1:8780`） |
 | `READER_SWAP_SWIPE` | `1` = 前滑 / 后滑方向对调（真机方向与预期相反时用，不用改页面） |
