@@ -1,4 +1,4 @@
-# glassreader 云端镜像。构建上下文是服务器上的 /opt/glassreader/app（push.sh 同步过去）。
+# glassreader 的镜像。构建上下文是仓库根目录（compose.yaml 里的 context: ..）。
 # 排版要中文字体：容器里没有 macOS 系统字体，装 fonts-noto-cjk（glassreader/pager.py 的 NOTO_SANS）。
 # 另外三个包是后备字体（pager.py 的 FALLBACK_FONTS）：颜文字里的外文字母和符号，中文字体没有。
 FROM python:3.12-slim

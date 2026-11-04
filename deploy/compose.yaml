@@ -1,15 +1,16 @@
-# glassreader 云端运行（deploy/cloud/README.md）。放在服务器 /opt/glassreader/。
-# 只监听回环：公网入口是 OpenResty 的 reader.example.com 站点（site.https.conf）。
+# glassreader 页图版的容器。在 deploy/ 里运行 docker compose up -d --build：书放 deploy/books/，进度在 deploy/data/。
+# 只监听回环，公网入口是反向代理（site.conf）。
 name: glassreader
 
 services:
   reader:
     build:
-      context: ./app
+      context: ..
+      dockerfile: deploy/Dockerfile
     image: glassreader:local
     container_name: glassreader
     env_file:
-      - ./.env
+      - ../.env
     environment:
       READER_HOST: 0.0.0.0
       READER_PORT: "8780"

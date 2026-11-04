@@ -71,7 +71,7 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-#: 页图地址的顺序（与 pages/reader/template.xml 的 src 一致）：先是累计计数，后是显示设置保存后的值
+#: 页图地址的顺序（与 skill/Pages/reader/template.xml 的 src 一致）：先是累计计数，后是显示设置保存后的值
 COUNTER_NAMES = ("next", "prev", "next_chapter", "prev_chapter", "auto")
 SETTING_NAMES = ("font", "weight", "brightness", "spacing")
 #: 亮度档（%），每档差 10，页面上直接加减
@@ -85,6 +85,8 @@ PACES = range(4, 61, 2)
 DEFAULT_PACE = 18
 #: 真机亮度（文字版用），平台的工具收 0～100。读不到眼镜的真实值，这里只记用户上次设的数
 OPTICS_LEVELS = range(0, 101, 10)
+#: 听书和智能翻页时当前段落的标记样式，名字在文字版的 agent.py 里
+MARKS = range(4)
 DEFAULT_OPTICS = 50
 #: 内存里留几本解析好的书：近 30 MB 的书每本占 30～50 MB，容器只有 256 MB
 MAX_BOOKS = 2
@@ -181,6 +183,7 @@ class Display:
     spacing: int = DEFAULT_SPACING
     pace: int = DEFAULT_PACE
     optics: int = DEFAULT_OPTICS
+    mark: int = 0
 
 
 class Library:
@@ -372,10 +375,11 @@ class Library:
         spacing: int | None = None,
         pace: int | None = None,
         optics: int | None = None,
+        mark: int | None = None,
     ) -> None:
         """只存给出的几项，别的留给文件里最新的值：整组写回会盖掉另一个实例刚存的设置。"""
         shown = {"weight": weight, "brightness": brightness, "spacing": spacing}
-        text = {"pace": pace, "optics": optics}
+        text = {"pace": pace, "optics": optics, "mark": mark}
         changes = {key: {k: v for k, v in part.items() if v is not None} for key, part in ((DISPLAY_KEY, shown), (TEXT_KEY, text))}
         self._store({key: value for key, value in changes.items() if value})
 
@@ -615,7 +619,7 @@ class Library:
         p = self._progress.get(DISPLAY_KEY, {})
         weight, brightness, spacing = p.get("weight"), p.get("brightness"), p.get("spacing")
         text = self._progress.get(TEXT_KEY, {})
-        pace, optics = text.get("pace", p.get("pace")), text.get("optics")  # 速度以前存在 _display 里
+        pace, optics, mark = text.get("pace", p.get("pace")), text.get("optics"), text.get("mark")  # 速度以前存在 _display 里
         if isinstance(brightness, int):  # 亮度以前的档位不是整十
             brightness = min(max(round(brightness / 10) * 10, 10), 100)
         return Display(
@@ -624,6 +628,7 @@ class Library:
             spacing if spacing in LINE_SPACINGS else DEFAULT_SPACING,
             pace if pace in PACES else DEFAULT_PACE,
             optics if optics in OPTICS_LEVELS else DEFAULT_OPTICS,
+            mark if mark in MARKS else 0,
         )
 
     # ------------------------------------------------------------------ 页图

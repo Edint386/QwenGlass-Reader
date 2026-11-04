@@ -78,13 +78,13 @@ DEFAULT_WEIGHT = 2
 #: 行距档（行高是字号的百分之几），每档差 15，页面上直接加减
 LINE_SPACINGS = (125, 140, 155, 170, 185)
 DEFAULT_SPACING = 140
-#: 左栏书名图的大小，和 pages/reader 里的 image 一致
+#: 左栏书名图的大小，和 skill/Pages/reader 里的 image 一致
 TITLE_SIZE = (72, 176)
 
 
 @dataclass(frozen=True)
 class Layout:
-    """正文页图的版式。默认 478×290：页面两侧各留 80 px 原生侧边栏 + 1 px 分隔线（pages/reader）。"""
+    """正文页图的版式。默认 478×290：页面两侧各留 80 px 原生侧边栏 + 1 px 分隔线（skill/Pages/reader）。"""
 
     width: int = 478
     height: int = 290

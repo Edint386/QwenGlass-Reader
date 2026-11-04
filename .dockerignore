@@ -1,0 +1,7 @@
+.git
+.venv
+.env
+.state
+deploy/books
+deploy/data
+**/__pycache__

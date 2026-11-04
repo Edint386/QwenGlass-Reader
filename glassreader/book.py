@@ -75,12 +75,14 @@ def _headings(text: str) -> list[re.Match[str]]:
 
 
 def parse_cn_number(text: str) -> int | None:
-    """``"12"`` / ``"１２"`` / ``"十二"`` / ``"一百零三"`` / ``"两千"`` → 整数；不是数字返回 None。"""
+    """``"12"`` / ``"１２"`` / ``"十二"`` / ``"一百零三"`` / ``"两千"`` / ``"二三四五"`` → 整数；不是数字返回 None。"""
     text = text.strip().translate(str.maketrans("０１２３４５６７８９", "0123456789"))
     if not text:
         return None
     if text.isdigit():
         return int(text)
+    if all(ch in _CN_DIGITS for ch in text):  # 没有十百千：一位一位读。语音识别会把 2222 写成“二二二二”，标题也有“第一〇五章”
+        return int("".join(str(_CN_DIGITS[ch]) for ch in text))
     total, section, digit = 0, 0, None
     for ch in text:
         if ch in _CN_DIGITS:
