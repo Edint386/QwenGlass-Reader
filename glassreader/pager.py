@@ -23,6 +23,7 @@ __all__ = [
     "DEFAULT_WEIGHT",
     "FALLBACK_FONTS",
     "FONT_SIZES",
+    "GOTO_SIZE",
     "HEITI",
     "LINE_SPACINGS",
     "NOTO_SANS",
@@ -37,6 +38,7 @@ __all__ = [
     "Page",
     "layout_for",
     "paginate_chapter",
+    "render_goto",
     "render_page",
     "render_title",
     "wrap",
@@ -371,4 +373,40 @@ def render_title(title: str) -> bytes:
             if c not in INVISIBLE:
                 y = row * (size + 4) + _baseline(size)
                 d.text((cx, y), c, font=widths.fonts.get(c, widths.font), fill=255, anchor="ms", stroke_width=stroke)
+    return _encode(img, 4)
+
+
+#: 章节跳转面板上的章名卡片，和页面里的 <image> 一样大
+GOTO_SIZE = (236, 120)
+
+
+def render_goto(title: str, number: str, hint: str = "") -> bytes:
+    """章节跳转面板：要跳去的章名（太长折两行，再长省略），下面一行是第几章，到头时再加一行提示。
+
+    页面不知道现在在哪一章，所以这张图由服务按当前位置和面板上的章数画。
+    """
+    width, height = GOTO_SIZE
+    img = Image.new("L", GOTO_SIZE, 0)
+    d = ImageDraw.Draw(img)
+    stroke = WEIGHTS[DEFAULT_WEIGHT][0]
+    title = " ".join(title.split())
+    for size in (26, 22):
+        widths = _widths(HEITI, size)
+        lines: list[str] = [""]
+        for c in title:
+            if sum(widths[x] for x in lines[-1] + c) > width - 8:
+                lines.append("")
+            lines[-1] += c
+        if len(lines) <= 2:
+            break
+    if len(lines) > 2:
+        lines = [lines[0], lines[1][:-1] + "…"]
+    small = _widths(HEITI, 18)
+    rows = [(line, widths, 255) for line in lines] + [(number, small, 170)] + ([(hint, small, 170)] if hint else [])
+    gaps = [size + 8] * len(lines) + [26] + ([24] if hint else [])
+    y = (height - sum(gaps)) // 2
+    for (text, w, fill), gap in zip(rows, gaps, strict=True):
+        x = (width - sum(w[c] for c in text)) / 2
+        _draw_chars(d, x, y + _baseline(gap - 6), text, w, fill, stroke=stroke if fill == 255 else 0.0)
+        y += gap
     return _encode(img, 4)

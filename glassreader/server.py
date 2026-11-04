@@ -5,6 +5,7 @@
 ``GET /r/{key}/{book}/{session}/{n}.png``       当前页的 4 级灰度 PNG。``n`` 是页面的累计计数（``a-b-j-k-…``），
                                                 按差值移动阅读位置（:meth:`~glassreader.library.Library.turn`）
 ``GET /r/{key}/{book}/{session}/title.png``     左栏竖排书名图
+``GET /r/{key}/{book}/{session}/goto-….png``    章节跳转面板上的章名卡片：``a-b-j-k-z-往后几章-往前几章``，前五段只为换地址
 ``GET /r/{key}/{book}/{session}/{n}.jpg``       同上，JPEG（真机不显示 PNG 时的退路，research §7 P1）
 ``/mcp``                                        MCP streamable HTTP（stateless + JSON 响应），Bearer 鉴权
 ==============================================  ==============================================================
@@ -27,6 +28,7 @@ import re
 import threading
 import time
 from collections.abc import AsyncIterator
+from functools import lru_cache
 
 import anyio
 from mcp.server.mcpserver import MCPServer
@@ -39,9 +41,11 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from .book import Book
 from .config import Settings
 from .library import Library, parse_counters
 from .mcp_tools import build_mcp_server
+from .pager import render_goto
 
 __all__ = ["COMMON_HEADERS", "MCP_PATH", "create_app", "redact_path"]
 
@@ -57,6 +61,9 @@ COMMON_HEADERS: tuple[tuple[str, str], ...] = (
 )
 _PAGE_FILE = re.compile(r"^([0-9]{1,9}(?:-[0-9]{1,9}){0,12})\.(png|jpg)$")
 _TITLE_FILE = re.compile(r"^title(?:-[0-9]{1,9})*\.png$")
+_GOTO_FILE = re.compile(r"^goto-(?:[0-9]{1,9}-){5}([0-9]{1,4})-([0-9]{1,4})\.png$")
+#: 面板上来回滑会反复请求同几张，章名、第几章一样就是同一张图
+_goto_image = lru_cache(maxsize=64)(render_goto)
 _BOOK_ID = re.compile(r"^[0-9a-f]{10}$")
 _SESSION = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 _KEY_IN_PATH = re.compile(r"^/r/[^/]+")
@@ -213,9 +220,10 @@ def create_app(
         p = request.path_params
         m = _PAGE_FILE.match(p["file"])
         title = _TITLE_FILE.match(p["file"])
+        goto = _GOTO_FILE.match(p["file"])
         if (
             not hmac.compare_digest(str(p["key"]).encode("utf-8"), key)
-            or not (m or title)
+            or not (m or title or goto)
             or not _BOOK_ID.match(p["book"])
             or not _SESSION.match(p["session"])
         ):
@@ -226,6 +234,15 @@ def create_app(
                 return None if book is None else library.title_image(book)
 
             png = await anyio.to_thread.run_sync(render_book_title)
+            return not_found() if png is None else Response(png, media_type="image/png")
+        if goto:
+            delta = int(goto.group(1)) - int(goto.group(2))
+
+            def render_goto_card() -> bytes | None:
+                book = library.book(p["book"])
+                return None if book is None else goto_image(book, delta)
+
+            png = await anyio.to_thread.run_sync(render_goto_card)
             return not_found() if png is None else Response(png, media_type="image/png")
         counters, ext = parse_counters(m.group(1)), m.group(2)
 
@@ -249,6 +266,17 @@ def create_app(
             return not_found()
         data, headers = result
         return Response(data, media_type="image/png" if ext == "png" else "image/jpeg", headers=headers)
+
+    def goto_image(book: Book, delta: int) -> bytes:
+        """从现在读到的章往后（delta > 0）或往前数 delta 个有正文的章：章名、第几章，到头时提示。"""
+        here = library.view(book)
+        there = library.move_chapters(here, delta) if delta else here
+        readable = book.readable()
+        index = max((i for i, c in enumerate(readable) if c <= there.chapter), default=0)
+        start = max((i for i, c in enumerate(readable) if c <= here.chapter), default=0)
+        hint = ("当前章节" if not delta else "已是最后一章" if start + delta > len(readable) - 1
+                else "已是第一章" if start + delta < 0 else "")
+        return _goto_image(book.chapters[readable[index]].title, f"{index + 1} / {len(readable)}", hint)
 
     async def internal_error(request: Request, exc: Exception) -> Response:
         # 500 由 ServerErrorMiddleware 直接发出、绕过上面的中间件，通用头要写在这里
