@@ -1,93 +1,129 @@
-# reader：千问 AI 眼镜看 TXT 小说（glassreader）
+# QwenGlass-Reader 文字版：在千问 AI 眼镜上看自己的 TXT 小说
 
-> **这个仓库有两个分支**，是同一个阅读器的两种接入方式。现在看的是 `agent`（Agent 文字版）。
+> 这个仓库有两个分支，是同一个阅读器的两种接入方式。现在看的是 `agent`（文字版）。
 >
-> | 分支 | 版本 | 接入方式 | 适合 | 限制 |
+> | 分支 | 版本 | 接入方式 | 好处 | 限制 |
 > |---|---|---|---|---|
-> | `main` | 页图版 | MCP 插件 + Skill。服务端把每页渲染成图片，手机下载后传给眼镜 | 想要好看的排版：字体、字号、粗细、行距、两端对齐、缺字回退都由服务端控制 | 翻页约 1 秒一页，不能听书 |
-> | `agent` | Agent 文字版 | Agent 自定义接入。服务走 WebSocket 下发文字，眼镜用原生字体显示 | 想要翻页立即响应，或者想听书：平台朗读，页面跟着翻 | 字号只有固定档位，行距不能调，没有两端对齐和缺字回退 |
+> | [`main`](https://github.com/Edint386/QwenGlass-Reader) | 页图版 | MCP 插件 + Skill，服务把每页画成图片 | 排版好看：字体、字号、粗细、行距、两端对齐都由服务控制，不缺字 | 翻页约 1 秒一页，不能听书 |
+> | `agent` | 文字版 | Agent 自定义接入，服务用 WebSocket 发文字 | 翻页立即响应，能听书、智能翻页，语音指令不经过大模型 | 字号只有固定几档，行距不能调，原生字体缺的字显示成空白 |
 >
-> 切换：克隆后运行 `git switch agent` 或 `git switch main`。只要文字版可以直接 `git clone -b agent https://github.com/Edint386/QwenGlass-Reader.git reader`。两个版本可以各跑一个实例，共用书库和进度，换个 Skill 接着读。
->
-> 这个分支也带着页图版的代码，下文以页图版为主。文字版的用法、听书和上线步骤见 [docs/agent.md](docs/agent.md)。
+> 两个版本可以各跑一个实例，挂同一个书库和进度目录，换个 Skill 接着读。
 
-页图版：电脑端读 TXT、切章分页、把每页渲染成适合绿色光机的图片；眼镜上的 Waft-DSL 页面用镜腿滑动翻页，两侧栏和菜单是原生控件。翻页不经过大模型，页图请求本身就是阅读进度。打开书、换书、跳章、查进度走语音 → 大模型 → MCP 工具。
+## 怎么工作
 
-Agent 文字版：服务用 WebSocket 把正文当原生文字推给眼镜，不接大模型，语音只认固定说法，还能听书和智能翻页，见 [docs/agent.md](docs/agent.md)。
+平台的「Agent 自定义接入」用 WebSocket 连到你的服务。服务读 TXT、分章，按眼镜原生字体的字宽排好版，把正文当文字发给眼镜。页面里有 8 页文字排成一圈，翻页只是换显示哪一页，所以立即响应；服务一边记进度，一边把前后的页补上，网络卡一下也还能往后翻 4 页、往前翻 3 页。
 
-调研结论、方案比较、真机待验证清单见 [docs/research.md](docs/research.md)。
+不接大模型，语音只认固定说法。
 
 | 路径 | 内容 |
 |---|---|
-| `glassreader/book.py` | TXT 解码（UTF-8 / GB18030 / BOM）、切章、“第 N 章”查找 |
-| `glassreader/pager.py` | 按章分页（禁则 / 悬挂标点 / 两端对齐）、页图渲染（478×290，4 级灰度 PNG） |
-| `glassreader/agent.py` | Agent 自定义接入的文字传输版（`docs/agent.md`） |
-| `glassreader/library.py` | 书库扫描、阅读位置（字符偏移 + 字号）、按计数差值翻页、跳转、进度文件 |
-| `glassreader/mcp_tools.py` | MCP 工具 `list_books` / `open_book` / `jump` / `reading_status` |
-| `glassreader/server.py` | HTTP：页图 `/r/<key>/<书>/<会话>/<计数>.png`、MCP `/mcp`（Bearer，无状态）；Agent 文字版的 WebSocket `/agent`（Bearer） |
-| `glassreader/cli.py` | `glassreader serve` / `books` / `open` |
-| `pages/reader/` | 眼镜阅读页 `template.xml` + Mock 数据 `data.json`（平台 `Pages/reader` 的本地源） |
-| `pages/reader-text/` | Agent 文字版的阅读页，文件同上（平台 `Pages/reader-text` 的本地源） |
-| `skill/` | `SKILL.md`、`ui_schema.json`（平台技能的本地源） |
-| `deploy/cloud/` | 云端运行：Docker 容器、OpenResty 站点、证书续期、发布和传书脚本，见 [deploy/cloud/README.md](deploy/cloud/README.md) |
-| `deploy/` | 之前的 Mac + 隧道方案，留作回滚：OpenResty `/reader/` 分流、第二条隧道、局域网转发器按路径分流，见 [deploy/README.md](deploy/README.md) |
-| `tests/` | 测试（不需要网络、服务器和真机） |
-| `samples/` | 原创示例小说（仅用于排版测试） |
+| `glassreader/` | 服务的 Python 源码。文字版在 `agent.py`，字宽表在 `native_font.py`；断行和打开书借用页图版的 `pager.py`、`mcp_tools.py`，所以页图版的代码也在 |
+| `skill/Pages/reader-text/` | 眼镜页面 `template.xml` 和 Mock 数据 `data.json` |
+| `deploy/` | `Dockerfile`、`compose.yaml` 和反向代理配置示例 `site.conf` |
+
+代码注释里提到的 `docs/research.md`、`docs/agent.md` 是开发笔记，没有放进这个仓库。
 
 ## 配置
 
-复制 `.env.example` 为 `.env` 填好，`set -a; . ./.env; set +a` 后运行。优先级：命令行 > 环境变量 > 默认值。
+复制 `.env.example` 为 `.env` 填好。优先级：命令行 > 环境变量 > 默认值。
 
 | 变量 | 说明 |
 |---|---|
-| `READER_TOKEN` | 平台 MCP 插件和 Agent 插件共用的 Bearer Token：`/mcp` 和 WebSocket `/agent` 都用它鉴权。不填每次启动随机生成（平台插件会失效） |
-| `READER_KEY` | 页图地址里的随机段：眼镜发不了请求头，页图只能靠路径鉴权 |
-| `READER_PUBLIC_URL` | 眼镜和平台访问的公网根地址，可带路径前缀（反代剥掉前缀后转发），如 `https://cast.example.com/reader`。不填只能本机联调 |
+| `READER_TOKEN` | 平台 Agent 插件的 Bearer Token，WebSocket `/agent` 用它鉴权。不填每次启动随机生成，平台插件会失效 |
+| `READER_KEY` | 图片地址里的随机段（书名图）：眼镜发不了请求头，只能靠路径鉴权。只用字母、数字、`-` 和 `_` |
+| `READER_PUBLIC_URL` | 眼镜和平台访问的公网根地址，如 `https://reader.example.com`，可以带路径前缀 |
 | `READER_BOOKS_DIR` | TXT 书库目录，递归收集 `*.txt`，扩展名不分大小写（默认 `~/Books`） |
 | `READER_STATE_FILE` | 进度文件（默认 `~/Library/Application Support/glassreader/progress.json`） |
 | `READER_HOST` / `READER_PORT` | 监听地址（默认 `127.0.0.1:8780`） |
-| `READER_SWAP_SWIPE` | `1` = 前滑 / 后滑方向对调（真机方向与预期相反时用，不用改页面） |
-| `READER_ALLOWED_HOSTS` | MCP 额外放行的 Host 头，逗号分隔 |
+| `READER_SWAP_SWIPE` | `1` = 前滑、后滑方向对调，真机方向和预期相反时用 |
 
-## 运行
+TXT 支持 UTF-8 和 GBK/GB18030，章节标题自动识别（“第 N 章”“序章”“Chapter 12”这类）。
 
-下文的命令都假定仓库克隆在名为 `reader` 的目录里（和 glasscast 并排放）：
+## 在电脑上运行
 
-```bash
-git clone https://github.com/Edint386/QwenGlass-Reader.git reader
-```
-
-需要 Python 3.12 和 [uv](https://docs.astral.sh/uv/)。排版用 macOS 系统自带的冬青黑体 `Hiragino Sans GB`、宋体 `Songti SC`；Linux 上用 `fonts-noto-cjk`（见 `glassreader/pager.py`）。
+需要 Python 3.12 和 [uv](https://docs.astral.sh/uv/)。
 
 ```bash
-cd reader && uv sync
+uv sync
 ```
 
 ```bash
-cd reader && uv run pytest -q
+uv run glassreader serve --books ~/Books --state .state/progress.json
 ```
 
-```bash
-cd reader && uv run glassreader serve --books samples --state .state/progress.json
-```
+不想装 uv，`pip install .` 之后直接运行 `glassreader serve` 也行。平台要从公网连进来，所以真正用起来还是要部署到服务器。
 
-不设 `READER_PUBLIC_URL` 时，启动信息里会打印一份能直接贴进模拟器的 dataSource。其他子命令：`glassreader books`（书库和进度）、`glassreader open [书名]`（打印一份新的 dataSource，key 要和 serve 一致）。
+## 部署到服务器
 
-### 在本地模拟器里看
+1. 在仓库根目录复制 `.env.example` 为 `.env`，填 `READER_TOKEN`、`READER_KEY`（各一串随机字符），`READER_PUBLIC_URL` 填你的域名。
+2. 准备书库和进度目录。容器里的用户是 10001，进度目录要它能写：
 
-模拟器在 glasscast 项目里：把 glasscast 仓库克隆到本仓库旁边、目录名 `glasscast`，先运行它的 `tools/simulator/fetch_assets.sh` 下载内核。
+   ```bash
+   cd deploy && mkdir -p books data && sudo chown 10001:10001 data
+   ```
 
-```bash
-cd glasscast && uv run python tools/simulator/serve.py --port 8772 --pages ../reader/pages
-```
+3. 把 TXT 放进 `deploy/books/`，启动：
 
-1. 打开 <http://127.0.0.1:8772/?preset=page:reader>，等状态变成"就绪"。
-2. 把右侧 data 换成 serve 启动时打印的 dataSource（或 MCP `open_book` 返回的 `u`、`t`），点**渲染**。每次都要新会话号：内核按完整地址缓存页图，服务端按会话记计数基线。
-3. 触控键：`后滑 next` 下一页、`前滑 prev` 上一页、`单击 confirm` 开菜单。服务端日志会打印每次请求的计数差值和页码。
+   ```bash
+   docker compose up -d --build
+   ```
 
-## 上平台（2026-10-30 已做，真机可用）
+   服务只监听本机的 `127.0.0.1:19517`，根文件系统只读，内存上限 256 MB。
+4. 反向代理照 `deploy/site.conf` 配：80 端口只放行证书校验，443 只转发 `/healthz`、`/r/`（书名图）、`/agent`（平台连进来的 WebSocket，要转发 `Upgrade`），其余 404。示例里证书和日志的路径是 1Panel OpenResty 的写法，按你的服务器改。
+5. 打开 `https://你的域名/healthz`，返回 `ok` 就通了。
 
-1. 公网入口：现在是云端的 `reader.example.com`（[deploy/cloud/README.md](deploy/cloud/README.md)）。之前是 `cast.example.com` 按路径 `/reader/` 转给本服务。执行清单在 [deploy/README.md](deploy/README.md)（改服务器 OpenResty、第二条隧道、局域网转发器分流）。
-2. 平台新建 MCP 插件（草稿）：基础 URL = `READER_PUBLIC_URL`，endpoint `/mcp`，认证 Bearer Token = `READER_TOKEN`（只填 token 本体），传输协议「无状态协议」。保存后应拉到 4 个工具。
-3. 新建技能「眼镜看小说」：贴 `skill/SKILL.md`，把里面的 `READER` 换成平台给这个插件的编码（形如 `AbC123`，工具卡片存成 `^^编码.工具名^^`）；`ui_schema.json` 保持 `[]`；新建页面 `Pages/reader`，贴 `pages/reader/template.xml` 和 `data.json`。
-4. 编辑器沙箱里说"看小说"，确认先调 `open_book` 再调 UI 页面渲染；然后真机测试 research §7 的 P1～P7。发布由你来点，范围选「个人私有」。
+和页图版一起用时，两个容器挂同一个 `books/` 和 `data/`，进度共用。两边写进度前都先加文件锁，所以这个目录要在同一台机器的本地磁盘上。
+
+## 在千问平台上配置
+
+1. 新建 Agent 插件，选「自定义接入」：
+   - WebSocket 地址填 `wss://你的域名/agent`。
+   - 认证选 Bearer Token，填 `READER_TOKEN`。
+   - 通信方式选「ASR文本」。
+   - 插件名可以叫“文字阅读器”。平台靠插件名和描述决定什么时候进来，描述里写清楚说什么话进入，比如“只在用户说‘打开文字阅读器’时使用”。
+2. 平台会自动生成同名的 Skill。在它的 `Pages` 里新建页面 `reader-text`，贴 `skill/Pages/reader-text/template.xml` 和 `data.json`，页面说明写 `reader-text`。
+3. 在这个 Skill 里点真机测试，绑定你的眼镜。绑定的眼镜不用发布就能用。
+
+对眼镜说“打开文字阅读器”就进来了。
+
+## 眼镜上的操作
+
+| 操作 | 阅读时 | 菜单里 |
+|---|---|---|
+| 前滑 / 后滑 | 下一页 / 上一页 | 移动选中项 |
+| 单击 | 打开菜单 | 返回阅读、智能翻页、自动翻页、显示设置、听书、章节跳转 |
+| 双击 | 底部提示“再双击一次退出”，再双击退出 | 同左 |
+
+显示设置里能调字号（16、18、20、22、24、28、32）、粗细（常规、粗体）、亮度（遮罩，10%～100%）、真机亮度（眼镜本身，0～100）和听书时的段落标记。
+
+## 语音指令
+
+会话里麦克风一直开着，不用唤醒词。为了不误触，命令要整句说，超过 14 个字的话不当命令，别的话一律不回应。
+
+| 想做什么 | 说法 |
+|---|---|
+| 翻页 | 下一页、上一页、往后翻五页、往前翻三页 |
+| 换章 | 下一章、上一章、跳到第三章 |
+| 跳位置 | 跳到百分之五十、跳到一半、回到开头 |
+| 问 | 我看到哪了、书架上有什么书、能说什么 |
+| 换书 | 打开《书名》、换一本某某 |
+| 字号 | 字大一点、字小一点 |
+| 亮度 | 亮度五、亮度调到五十 |
+| 听书 | 开始听书、暂停、继续 |
+| 智能翻页 | 智能翻页、停止智能翻页 |
+| 退出 | 退出、不看了 |
+
+亮度命令带一个数，同时定两个亮度，越大越亮：0～9 时软件亮度 10%～100%、真机亮度 0；10～100 时软件亮度 100%，真机亮度就是这个数（取整十）。
+
+## 三种自动往下读
+
+三种只能开一种，开一个会关掉另一个。
+
+| | 自动翻页 | 智能翻页 | 听书 |
+|---|---|---|---|
+| 怎么翻 | 每页停一样久，1～30 秒 | 按这一页的字数算停多久，每秒 4～60 字 | 平台朗读，页面跟着声音翻 |
+| 出声 | 不出声 | 不出声 | 朗读 |
+| 位置提示 | 左栏倒计时 | 段落前的标记 | 段落前的标记 |
+| 打开菜单时 | 暂停 | 暂停 | 停播，回到正文接着读 |
+
+平台不告诉服务朗读读到哪了，所以听书按语速估（每秒约 6.6 字），段落之间留一点空隙让声音和估算对齐。摘下眼镜时听书和智能翻页都会停。

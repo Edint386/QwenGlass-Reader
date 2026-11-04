@@ -2,44 +2,54 @@
   <!-- reader-text：Agent 文字传输版的阅读页（docs/agent.md），正文是原生文字，比 pages/reader 多听书和智能翻页，没有行距。服务端用 SHOW_UI 推数据。
        u t：书名图地址前缀、书名。s：打开时的亮度和真机亮度。v：语音翻页次数。bar：进度条宽度。pc：百分比。ls：0 = 都没开，1 = 听书（菜单把它停下时也是 1），2 = 智能翻页。fs fw：字号、字重（400 常规、700 粗体）。
        zs：智能翻页每秒字数。end：1 = 没有下一页。
-       s0～s7 / f0～f7：环上八个槽的正文、页码。hd：当前章节名，只有一份，章节变了才发，翻过章节时比正文晚一点，换来少发和少占绑定。i 是当前显示的槽：
+       s0～s7：环上八个槽的正文。hd：当前章节名，只有一份，章节变了才发，翻过章节时比正文晚一点，换来少发和少占绑定。i 是当前显示的槽：
        翻页只改 i，立即响应，再上报新的槽号，服务端记进度并补上离得远的槽。i 放在主数据里，听书、智能翻页、语音翻页时服务也写它，这样服务翻页也只补一格。
        v 也一起报：服务刚翻的那一页可能还在路上，页面报的槽号比服务旧是正常的。
+       段落标记：听书和智能翻页时才有，正文里不带。ms：样式，0 圆点、1 竖线、2 下划线、3 圆角框，ma mb ml 是下一种、上一种和名字。ds：在哪个槽，8 = 不显示。
+       dy dh：这段的 top 和高度。mx mq mw mg mc：圆点、竖线的位置和颜色，下划线时是盖缩进的黑块，没用时宽度是 0。mt：和文字一样长的空格，下划线画在它上面。
+       pn pt：这一章第几页、一共几页，翻页时页面自己加减，服务也写。
        hi lo：环上往后、往前最远的有效槽。走到这里说明服务端跟不上了（断网、卡顿），再走就绕回旧内容，所以不翻，左栏提示。翻不动也上报：之前的上报可能丢了。
-       查表省根节点和绑定：数组元素都是 {n: 值}，写 {{nx[i].n}}。nx pv：环上的下一个、上一个槽，下标是 i。mn mp me：菜单里前滑、后滑、单击去哪，tt：菜单高亮框的 top，下标都是 m。up dn：字号的上下一档，下标是 fs，到头是它自己。
+       查表省根节点和绑定：数组元素都是 {n: 值}，写 {{tb.nx[i].n}}，表都在 tb 这一个键里（数据键上限 64）。nx pv：环上的下一个、上一个槽，下标是 i。mn mp me：菜单里前滑、后滑、单击去哪，tt：菜单高亮框的 top，下标都是 m。up dn：字号的上下一档，下标是 fs，到头是它自己。
        这几张表不变，只在打开时发。数组只能整个发，所以每次翻页会变的东西不要放进数组：只改一格也要重发八格。
        没有行距设置：原生 label 没有行距属性；一行一个 label 又会超过 128 个绑定（a:for 每行都算，隐藏的槽也算）。
-       m：0 = 阅读，1～7 = 主菜单选中第 m 项，11～15 = 显示设置菜单选中第 m - 10 项，21～24 = 调字号、粗细、亮度、真机亮度，25 = 自动翻页设置，26 = 智能翻页设置。
+       m：0 = 阅读，1～6 = 主菜单选中第 m 项，11～16 = 显示设置菜单选中第 m - 10 项，19 = 选段落标记，21～24 = 调字号、粗细、亮度、真机亮度，25 = 自动翻页设置，26 = 智能翻页设置，20 = 章节跳转。
        菜单打开、回到正文都上报：听书和智能翻页在服务端走，要它们停下。
        bv：亮度，lv：亮度档位，100% 是 0，每低 10% 加 1，遮罩透明度按它算。字号、粗细、亮度滑动时在页面里改，立刻生效，单击保存才上报：上报一圈要约 2 秒。字号变了，断行要等服务端重新分页。
-       ob：真机亮度，页面只记数，读不到眼镜的真实值。只在滑动改了的时候上报，服务端才调用工具，打开页面不下发。
+       ob：真机亮度，页面只记数，读不到眼镜的真实值。bv lv ob 在主数据里，语音才调得了。只在滑动改了的时候上报，服务端才调用工具，打开页面不下发。
        fs fw 放在主数据里，页面用 dataSource:// 写，服务端的 UPDATE 也写这里（语音改字号、换书），不用重开页面，自动翻页也不会停。服务端写不到 d:。
        nv：设置面板上的数字；nl nh ns：它的下限（显示“关闭”）、上限、步长。两个面板共用，进面板时写好。
+       nm pu pd mz mh：同一个位置换文字时查表，写成两个元素要多占绑定（a:else 也算）。nm pu pd 按 m 查，mz mh 按 ls 查。
        s（d:）：自动翻页的秒数；p：生效的秒数，0 = 自动翻页关闭；c：这一页还剩几秒；r：计时循环在跑；vs：看到过的 v。
        一次 data:// 写多个键用 &amp; 分隔；按键链按状态分支，缺了哪个键就落到下一支，所以每支都写全。菜单首尾相接。 -->
   <!-- 第一次双击只显示 confirm-back-text，第二次才触发 on-key-back 并关页面。提示显示在 prompt-config 的位置，空文字时平时看不见。
        不能写 forbidden="back"：真机和模拟器都是双击完全没反应，on-key-back 也不触发，和文档相反 -->
   <page-meta theme="no-status-bar|disable-chat-bar" screen-awake="keep" confirm-back-text="再双击一次退出" />
   <prompt-config text="" />
-  <data bv="100" lv="0" ob="50" m="0" s="7" nv="0" nl="0" nh="30" ns="1" p="0" c="0" r="0" vs="0" net="1" bt="1" />
-  <json turn='{"slot": {{i}}, "v": {{v}}}' cfg='{"slot": {{i}}, "v": {{v}}, "f": {{fs}}, "w": {{fw}}, "b": {{d:bv}}, "o": {{d:ob}}, "z": {{d:nv}}}' />
+  <data m="0" s="7" nv="0" nl="0" nh="30" ns="1" p="0" c="0" r="0" vs="0" net="1" bt="1" />
+  <json turn='{"slot": {{i}}, "v": {{v}}}' cfg='{"slot": {{i}}, "v": {{v}}, "f": {{fs}}, "w": {{fw}}, "b": {{bv}}, "o": {{ob}}, "z": {{d:nv}}, "k": {{ms}}}' />
   <connection-event on-net-connected="data://update?net=1" on-net-disconnected="data://update?net=0"
                     on-gma-connected="data://update?bt=1" on-gma-disconnected="data://update?bt=0" />
 
   <key-event a:if="{{d:m == 0}}" on-key-enter="emit://event/move?m=1&amp;p={{d:p}}&amp;n=menu_open" on-key-next="emit://event/tn?" on-key-prev="emit://event/tp?" />
   <key-event a:elif="{{d:m > 24}}" on-key-enter="emit://event/start{{d:m}}?" on-key-next="emit://event/more?" on-key-prev="emit://event/less?" />
-  <key-event a:elif="{{d:m == 22}}" on-key-next="dataSource://update?fw=700" on-key-prev="dataSource://update?fw=400" />
+  <key-event a:elif="{{d:m == 22}}" on-key-next="emit://event/w{{fw}}?" on-key-prev="emit://event/w{{fw}}?" />
   <key-event a:elif="{{d:m > 20}}" on-key-enter="emit://event/move?m={{d:m - 10}}&amp;p={{d:p}}&amp;n=display" on-key-next="emit://event/s{{d:m}}a?" on-key-prev="emit://event/s{{d:m}}b?" />
-  <key-event a:elif="{{d:m > 10}}" on-key-enter="data://update?m={{me[d:m].n}}" on-key-next="data://update?m={{mn[d:m].n}}" on-key-prev="data://update?m={{mp[d:m].n}}" />
+  <key-event a:elif="{{d:m == 20}}" on-key-enter="emit://event/start20?" on-key-next="emit://event/more?" on-key-prev="emit://event/less?" />
+  <key-event a:elif="{{d:m == 19}}" on-key-enter="emit://event/move?m=15&amp;p={{d:p}}&amp;n=display" on-key-next="emit://event/k?t={{tb.ma[ms].n}}&amp;m=19" on-key-prev="emit://event/k?t={{tb.mb[ms].n}}&amp;m=19" />
+  <key-event a:elif="{{d:m == 15}}" on-key-enter="emit://event/k?t={{ms}}&amp;m=19" />
+  <key-event a:elif="{{d:m > 10}}" on-key-enter="data://update?m={{tb.me[d:m].n}}" on-key-next="data://update?m={{tb.mn[d:m].n}}" on-key-prev="data://update?m={{tb.mp[d:m].n}}" />
   <key-event a:elif="{{d:m == 1}}" on-key-enter="emit://event/move?m=0&amp;p={{d:p}}&amp;n=menu_close" />
   <key-event a:elif="{{d:m == 5}}" on-key-enter="emit://event/move?m=0&amp;p=0&amp;n=listen" />
-  <key-event a:elif="{{d:m == 6}}" on-key-enter="emit://event/move?m=0&amp;p={{d:p}}&amp;n=next_chapter" />
-  <key-event a:elif="{{d:m == 7}}" on-key-enter="emit://event/move?m=0&amp;p={{d:p}}&amp;n=prev_chapter" />
-  <!-- 主菜单的滑动、第 2～4 项的单击和退出都落到这一支。退出：服务结束会话，麦克风才会关 -->
-  <key-event a:else="" on-key-enter="emit://event/e{{d:m}}?" on-key-next="data://update?m={{mn[d:m].n}}" on-key-prev="data://update?m={{mp[d:m].n}}" on-key-back="svc://ui-action?mode=mcp&amp;name=exit&amp;params={{json:turn}}" />
+  <!-- 主菜单的滑动、第 2～4、6 项的单击和退出都落到这一支。退出：服务结束会话，麦克风才会关 -->
+  <key-event a:else="" on-key-enter="emit://event/e{{d:m}}?" on-key-next="data://update?m={{tb.mn[d:m].n}}" on-key-prev="data://update?m={{tb.mp[d:m].n}}" on-key-back="svc://ui-action?mode=mcp&amp;name=exit&amp;params={{json:turn}}" />
   <!-- 先改 i 再上报：上报时才取 turn 的值。event://t 这个前缀两个方向都接得到，排在具体的事件行后面执行 -->
-  <event match="event://tn?" a:if="{{i != hi}}" action="dataSource://update?i={{nx[i].n}}" />
-  <event match="event://tp?" a:if="{{i != lo}}" action="dataSource://update?i={{pv[i].n}}" />
+  <event match="event://tn?" a:if="{{i != hi}}" action="emit://event/pa?" />
+  <event match="event://tp?" a:if="{{i != lo}}" action="emit://event/pb?" />
+  <event match="event://tn?" a:if="{{i != hi}}" action="dataSource://update?i={{tb.nx[i].n}}" />
+  <event match="event://tp?" a:if="{{i != lo}}" action="dataSource://update?i={{tb.pv[i].n}}" />
+  <!-- 页码页面自己加减，不等服务。pt 是这一章的总页数，到头先停着：翻进别的章要等服务写 pn pt -->
+  <event match="event://pa?" a:if="{{pt > pn}}" action="dataSource://update?pn={{pn + 1}}" />
+  <event match="event://pb?" a:if="{{pn > 1}}" action="dataSource://update?pn={{pn - 1}}" />
   <event match="event://t" a:if="{{d:p > 0}}" action="data://update?c={{d:p}}" />
   <event match="event://t" action="svc://ui-action?mode=mcp&amp;name=turn&amp;params={{json:turn}}" />
   <!-- 换状态再上报：m 是去哪，p 是自动翻页的秒数，n 是上报的动作。显示设置保存也走这里，所以带 cfg。
@@ -47,24 +57,6 @@
        m 带原值留在原处：没保存的字号回到正文，和服务端的断行对不上 -->
   <event match="event://move?" action="data://update?m={{e:m}}&amp;p={{e:p}}&amp;c={{d:p}}" />
   <event match="event://move?" action="svc://ui-action?mode=mcp&amp;name={{e:n}}&amp;params={{json:cfg}}" />
-  <!-- 原生字号只有固定档位 -->
-  <event match="event://s21a?" action="dataSource://update?fs={{up[fs].n}}" />
-  <event match="event://s21b?" action="dataSource://update?fs={{dn[fs].n}}" />
-  <event match="event://s23a?" a:if="{{d:bv != 100}}" action="data://update?lv={{d:lv - 1}}&amp;bv={{d:bv + 10}}" />
-  <event match="event://s23b?" a:if="{{d:bv != 10}}" action="data://update?lv={{d:lv + 1}}&amp;bv={{d:bv - 10}}" />
-  <!-- 真机亮度滑一下上报一次，边滑边看效果。event://s24 这个前缀两个方向都接得到 -->
-  <event match="event://s24a?" a:if="{{d:ob != 100}}" action="data://update?ob={{d:ob + 10}}" />
-  <event match="event://s24b?" a:if="{{d:ob != 0}}" action="data://update?ob={{d:ob - 10}}" />
-  <event match="event://s24" action="svc://ui-action?mode=mcp&amp;name=optics&amp;params={{json:cfg}}" />
-  <event match="event://more?" a:if="{{d:nv != d:nh}}" action="data://update?nv={{d:nv + d:ns}}" />
-  <event match="event://less?" a:if="{{d:nv != d:nl}}" action="data://update?nv={{d:nv - d:ns}}" />
-  <!-- 主菜单单击：e 后面是第几项 -->
-  <event match="event://e2?" a:if="{{ls == 2}}" action="emit://event/move?m=0&amp;p=0&amp;n=smart_off" />
-  <!-- 速度最低 4，再往下一档是 2，显示“关闭”，单击回到正文不开始 -->
-  <event match="event://e2?" a:else="" action="data://update?nv={{zs}}&amp;nl=2&amp;nh=60&amp;ns=2&amp;m=26" />
-  <event match="event://e3?" a:if="{{d:p > 0}}" action="emit://event/move?m=0&amp;p=0&amp;n=menu_close" />
-  <event match="event://e3?" a:else="" action="data://update?nv={{d:s}}&amp;nl=0&amp;nh=30&amp;ns=1&amp;m=25" />
-  <event match="event://e4?" action="data://update?m=11" />
   <!-- emit 等这一串都走完才执行，r 可以先写。vs 要一起对齐：自动翻页关着时 v 还在变，开启后第一圈比对不上，第一页会多停 1 秒 -->
   <event match="event://start25?" a:if="{{d:r == 0}}" action="emit://event/d183?n=183" />
   <event match="event://start25?" action="data://update?p={{d:nv}}&amp;c={{d:nv}}&amp;s={{d:nv}}&amp;vs={{v}}&amp;r=1" />
@@ -72,8 +64,6 @@
   <!-- 智能翻页开着时选了自动翻页：后选的算。ls 在这里就清，等服务回话的话 d9 先把自动翻页关了 -->
   <event match="event://start25?" a:elif="{{ls == 2}}" action="dataSource://update?ls=0" />
   <event match="event://start25?" action="emit://event/move?m=0&amp;p={{d:p}}&amp;n=auto" />
-  <event match="event://start26?" a:if="{{d:nv == d:nl}}" action="emit://event/move?m=0&amp;p={{d:p}}&amp;n=menu_close" />
-  <event match="event://start26?" a:else="" action="emit://event/move?m=0&amp;p=0&amp;n=smart" />
   <event match="event://d1" action="emit://event/d{{e:n - 1}}?n={{e:n - 1}}" />
   <event match="event://d9" a:if="{{d:p == 0}}" action="data://update?r=0" />
   <!-- 听书时翻页跟着声音走，不管自动翻页是先开的还是后开的，约 1 秒内都关掉。r 要一起清，不然下次开不起来 -->
@@ -87,11 +77,43 @@
   <event match="event://second?" a:else="" action="emit://event/tn?" />
   <!-- 看不见的时候不翻：页面被遮挡、灭屏、摘下眼镜都关掉自动翻页。摘下时告诉服务，听书也要停；灭屏也告诉服务，智能翻页要停，听书接着读。
        on-hide 不告诉服务：播报字幕会不会触发它还没在真机上验证，接了可能问一句进度智能翻页就停 -->
-  <lifecycle-event on-load="data://update?bv={{s.b}}&amp;lv={{s.lv}}&amp;ob={{s.ob}}" on-hide="data://update?p=0" on-screen-off="emit://event/move?m={{d:m}}&amp;p=0&amp;n=hidden" />
+  <lifecycle-event on-hide="data://update?p=0" on-screen-off="emit://event/move?m={{d:m}}&amp;p=0&amp;n=hidden" />
   <wear-event on-wear-off="emit://event/move?m={{d:m}}&amp;p=0&amp;n=away" />
 
   <!-- 可见元素都放在这一层里：根节点直接子元素最多 64 个，事件已经占了大半 -->
   <view width="100%" height="100%" flex-flow="row" flex-cross="start" column-gap="0">
+    <!-- 设置和面板的事件放在这一层，根节点才放得下。文档写的是根节点，模拟器里这里也行，真机要验证。翻页、菜单和计时不放这里：失效了没法用。
+         粗细只有两档，前滑后滑都换成另一档，不会到头停住 -->
+    <!-- 段落标记：进面板和每次滑动都上报，服务把新样式画在当前段上，没在读就拿这一页第一段示范。单击保存才存 -->
+    <event match="event://k?" action="dataSource://update?ms={{e:t}}" />
+    <event match="event://k?" action="data://update?m={{e:m}}" />
+    <event match="event://k?" action="svc://ui-action?mode=mcp&amp;name=mark&amp;params={{json:cfg}}" />
+    <event match="event://w400?" action="dataSource://update?fw=700" />
+    <event match="event://w700?" action="dataSource://update?fw=400" />
+    <!-- 原生字号只有固定档位 -->
+    <event match="event://s21a?" action="dataSource://update?fs={{tb.up[fs].n}}" />
+    <event match="event://s21b?" action="dataSource://update?fs={{tb.dn[fs].n}}" />
+    <event match="event://s23a?" a:if="{{bv != 100}}" action="dataSource://update?lv={{lv - 1}}&amp;bv={{bv + 10}}" />
+    <event match="event://s23b?" a:if="{{bv != 10}}" action="dataSource://update?lv={{lv + 1}}&amp;bv={{bv - 10}}" />
+    <!-- 真机亮度滑一下上报一次，边滑边看效果。event://s24 这个前缀两个方向都接得到 -->
+    <event match="event://s24a?" a:if="{{ob != 100}}" action="dataSource://update?ob={{ob + 10}}" />
+    <event match="event://s24b?" a:if="{{ob != 0}}" action="dataSource://update?ob={{ob - 10}}" />
+    <event match="event://s24" action="svc://ui-action?mode=mcp&amp;name=optics&amp;params={{json:cfg}}" />
+    <event match="event://more?" a:if="{{d:nv != d:nh}}" action="data://update?nv={{d:nv + d:ns}}" />
+    <event match="event://less?" a:if="{{d:nv != d:nl}}" action="data://update?nv={{d:nv - d:ns}}" />
+    <!-- 主菜单单击：e 后面是第几项 -->
+    <event match="event://e2?" a:if="{{ls == 2}}" action="emit://event/move?m=0&amp;p=0&amp;n=smart_off" />
+    <!-- 速度最低 4，再往下一档是 2，显示“关闭”，单击回到正文不开始 -->
+    <event match="event://e2?" a:else="" action="data://update?nv={{zs}}&amp;nl=2&amp;nh=60&amp;ns=2&amp;m=26" />
+    <event match="event://e3?" a:if="{{d:p > 0}}" action="emit://event/move?m=0&amp;p=0&amp;n=menu_close" />
+    <event match="event://e3?" a:else="" action="data://update?nv={{d:s}}&amp;nl=0&amp;nh=30&amp;ns=1&amp;m=25" />
+    <event match="event://e4?" action="data://update?m=11" />
+    <!-- 章节跳转：数字在页面里加减，滑动立刻显示，单击才上报。cn cc：现在第几章、一共几章，只数有正文的章。没改就是回到正文 -->
+    <event match="event://e6?" action="data://update?nv={{cn}}&amp;nl=1&amp;nh={{cc}}&amp;ns=1&amp;m=20" />
+    <event match="event://start20?" a:if="{{d:nv == cn}}" action="emit://event/move?m=0&amp;p={{d:p}}&amp;n=menu_close" />
+    <event match="event://start20?" a:else="" action="emit://event/move?m=0&amp;p={{d:p}}&amp;n=chapter" />
+    <event match="event://start26?" a:if="{{d:nv == d:nl}}" action="emit://event/move?m=0&amp;p={{d:p}}&amp;n=menu_close" />
+    <event match="event://start26?" a:else="" action="emit://event/move?m=0&amp;p=0&amp;n=smart" />
     <!-- 左栏：书名 + 时间 + 连接状态。书名是服务端排好的图：长书名要缩小排两列，原生控件算不出字数 -->
     <view width="80" height="290" flex-flow="column" flex-cross="center" padding-top="16" row-gap="10">
       <!-- 书名图是纯白的，opa 压一点，不比正文亮 -->
@@ -132,37 +154,23 @@
       <label text="{{hd}}" floating="true" left="14" top="3" width="370" height="20" font-size="16" color="#7A7A7A" long-mode="dot" />
       <!-- 章节名、百分比和进度条一样只有一份：每槽一个要多 7 个绑定，晚约 0.5 秒不要紧 -->
       <label text="{{pc}}" floating="true" left="394" top="3" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
-      <view a:if="{{i == 0}}" floating="true" left="0" top="0" width="478" height="290">
-        <label text="{{s0}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
-        <label text="{{f0}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
-      </view>
-      <view a:if="{{i == 1}}" floating="true" left="0" top="0" width="478" height="290">
-        <label text="{{s1}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
-        <label text="{{f1}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
-      </view>
-      <view a:if="{{i == 2}}" floating="true" left="0" top="0" width="478" height="290">
-        <label text="{{s2}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
-        <label text="{{f2}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
-      </view>
-      <view a:if="{{i == 3}}" floating="true" left="0" top="0" width="478" height="290">
-        <label text="{{s3}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
-        <label text="{{f3}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
-      </view>
-      <view a:if="{{i == 4}}" floating="true" left="0" top="0" width="478" height="290">
-        <label text="{{s4}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
-        <label text="{{f4}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
-      </view>
-      <view a:if="{{i == 5}}" floating="true" left="0" top="0" width="478" height="290">
-        <label text="{{s5}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
-        <label text="{{f5}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
-      </view>
-      <view a:if="{{i == 6}}" floating="true" left="0" top="0" width="478" height="290">
-        <label text="{{s6}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
-        <label text="{{f6}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
-      </view>
-      <view a:if="{{i == 7}}" floating="true" left="0" top="0" width="478" height="290">
-        <label text="{{s7}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
-        <label text="{{f7}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+      <label a:if="{{i == 0}}" text="{{s0}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+      <label a:if="{{i == 1}}" text="{{s1}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+      <label a:if="{{i == 2}}" text="{{s2}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+      <label a:if="{{i == 3}}" text="{{s3}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+      <label a:if="{{i == 4}}" text="{{s4}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+      <label a:if="{{i == 5}}" text="{{s5}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+      <label a:if="{{i == 6}}" text="{{s6}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+      <label a:if="{{i == 7}}" text="{{s7}}" floating="true" left="14" top="30" width="464" height="238" font-size="{{fs}}" font-weight="{{fw}}" color="#E8E8E8" long-mode="clip" />
+      <label text="{{pn}} / {{pt}}" floating="true" left="394" top="266" width="70" height="20" font-size="16" color="#7A7A7A" text-align="right" />
+      <!-- 段落标记：一个外框定位置，里面按样式画。圆点和竖线都是最后这个 view，radius 超过一半时内核按一半算，所以写死 10；下划线时它是盖缩进的黑块，要在最后。
+           ds 是别的槽时不显示：滑走了不跟着。调字号时位置还是旧字号的，服务收到保存才重算，所以先藏起来 -->
+      <view a:if="{{d:m != 21}}" floating="true" left="0" top="0" width="478" height="290">
+        <view a:if="{{ds == i}}" floating="true" left="0" top="{{dy}}" width="478" height="{{dh}}">
+          <view a:if="{{ms == 3}}" floating="true" left="7" top="0" width="466" height="100%" radius="6" border-width="1" border-color="#A0A0A0" />
+          <label a:if="{{ms == 2}}" text="{{mt}}" floating="true" left="14" top="0" width="464" height="238" font-size="{{fs}}" color="#A0A0A0" long-mode="clip" text-decoration="underline" />
+          <view floating="true" left="{{mx}}" top="{{mq}}" width="{{mw}}" height="{{mg}}" radius="10" bg-color="{{mc}}" />
+        </view>
       </view>
     </view>
 
@@ -188,16 +196,26 @@
     </view>
     <!-- 调显示设置：只占右栏，正文露在外面，滑动时字号、粗细、亮度立刻变，真机亮度要等工具下发 -->
     <view a:elif="{{d:m > 20}}" width="80" height="290" flex-flow="column" flex-cross="center" padding-top="72" row-gap="0">
-      <label a:if="{{d:m == 21}}" text="字号" width="72" height="30" font-size="24" color="#D0D0D0" text-align="center" />
-      <label a:elif="{{d:m == 22}}" text="粗细" width="72" height="30" font-size="24" color="#D0D0D0" text-align="center" />
-      <label a:elif="{{d:m == 24}}" text="真机" width="72" height="30" font-size="24" color="#D0D0D0" text-align="center" />
-      <label a:else="" text="亮度" width="72" height="30" font-size="24" color="#D0D0D0" text-align="center" />
+      <label text="{{tb.nm[d:m].n}}" width="72" height="30" font-size="24" color="#D0D0D0" text-align="center" />
       <label a:if="{{d:m == 21}}" text="{{fs}}" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
-      <label a:elif="{{d:m == 23}}" text="{{d:bv}}%" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
-      <label a:elif="{{d:m == 24}}" text="{{d:ob}}%" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
+      <label a:elif="{{d:m == 23}}" text="{{bv}}%" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
+      <label a:elif="{{d:m == 24}}" text="{{ob}}%" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
       <label a:elif="{{fw == 700}}" text="粗体" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
       <label a:else="" text="常规" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
       <label text="单击保存" width="72" height="24" margin-top="14" font-size="16" color="#A0A0A0" text-align="center" />
+    </view>
+    <!-- 段落标记：和调字号一样只占右栏。听书和智能翻页时才看得到标记，所以这里写名字 -->
+    <view a:elif="{{d:m == 19}}" width="80" height="290" flex-flow="column" flex-cross="center" padding-top="72" row-gap="0">
+      <label text="标记" width="72" height="30" font-size="24" color="#D0D0D0" text-align="center" />
+      <label text="{{tb.ml[ms].n}}" width="80" height="44" margin-top="10" font-size="22" font-weight="bold" color="#FFFFFF" text-align="center" />
+      <label text="单击保存" width="72" height="24" margin-top="14" font-size="16" color="#A0A0A0" text-align="center" />
+    </view>
+    <!-- 章节跳转：和调字号一样只占右栏 -->
+    <view a:elif="{{d:m == 20}}" width="80" height="290" flex-flow="column" flex-cross="center" padding-top="72" row-gap="0">
+      <label text="章节" width="72" height="30" font-size="24" color="#D0D0D0" text-align="center" />
+      <label text="{{d:nv}}" width="80" height="44" margin-top="10" font-size="28" font-weight="bold" color="#FFFFFF" text-align="center" />
+      <label text="共 {{cc}} 章" width="80" height="20" font-size="16" color="#A0A0A0" text-align="center" />
+      <label text="单击跳转" width="72" height="24" margin-top="14" font-size="16" color="#A0A0A0" text-align="center" />
     </view>
     <view a:else="" width="80" height="290" flex-flow="column" flex-cross="center" padding-top="96" row-gap="6">
       <label text="滑动" width="72" height="20" font-size="16" color="#7A7A7A" text-align="center" />
@@ -210,63 +228,54 @@
     <view a:if="{{d:m > 24}}" floating="true" left="186" top="44" width="268" height="202"
           bg-color="#000000" bg-opa="255" border-width="2" border-color="#A0A0A0" radius="10"
           flex-flow="column" flex-cross="center" row-gap="0" padding-top="18">
-      <label a:if="{{d:m == 25}}" text="自动翻页" width="236" height="32" font-size="22" color="#D0D0D0" text-align="center" />
-      <label a:else="" text="智能翻页" width="236" height="32" font-size="22" color="#D0D0D0" text-align="center" />
+      <label text="{{tb.nm[d:m].n}}" width="236" height="32" font-size="22" color="#D0D0D0" text-align="center" />
       <view a:if="{{d:nv != d:nl}}" width="236" height="84" margin-top="8" flex-flow="row" flex-align="center" flex-cross="end" column-gap="8">
         <label text="{{d:nv}}" height="72" font-size="58" font-weight="bold" color="#FFFFFF" />
-        <label a:if="{{d:m == 25}}" text="秒" height="40" font-size="24" color="#D0D0D0" />
-        <label a:else="" text="字/秒" height="40" font-size="24" color="#D0D0D0" />
+        <label text="{{tb.pu[d:m].n}}" height="40" font-size="24" color="#D0D0D0" />
       </view>
       <label a:else="" text="关闭" width="236" height="84" margin-top="8" font-size="44" font-weight="bold" color="#FFFFFF" text-align="center" />
       <label a:if="{{d:nv == d:nl}}" text="单击返回阅读" width="236" height="28" margin-top="10" font-size="20" color="#D0D0D0" text-align="center" />
-      <label a:elif="{{d:m == 25}}" text="每页停留时间" width="236" height="28" margin-top="10" font-size="20" color="#D0D0D0" text-align="center" />
-      <label a:else="" text="每秒阅读字数" width="236" height="28" margin-top="10" font-size="20" color="#D0D0D0" text-align="center" />
+      <label a:else="" text="{{tb.pd[d:m].n}}" width="236" height="28" margin-top="10" font-size="20" color="#D0D0D0" text-align="center" />
     </view>
-    <!-- 占位：调显示设置时不盖住正文，也不能落到下面的菜单分支 -->
-    <view a:elif="{{d:m > 20}}" floating="true" left="0" top="0" width="1" height="1" />
+    <!-- 占位：调显示设置和跳章节时不盖住正文，也不能落到下面的菜单分支 -->
+    <view a:elif="{{d:m > 18}}" floating="true" left="0" top="0" width="1" height="1" />
 
     <!-- 显示设置菜单：每项后面是当前值；调好保存后回到这里，方便接着调别的 -->
-    <view a:elif="{{d:m > 10}}" floating="true" left="186" top="44" width="268" height="202"
+    <view a:elif="{{d:m > 10}}" floating="true" left="186" top="44" width="268" height="210"
           bg-color="#000000" bg-opa="255" border-width="2" border-color="#A0A0A0" radius="10"
-          flex-flow="column" flex-cross="center" row-gap="0" padding-top="9">
-      <view floating="true" left="14" top="{{tt[d:m].n}}" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
-      <label text="字号  {{fs}}" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
-      <label a:if="{{fw == 700}}" text="粗细  粗体" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
-      <label a:else="" text="粗细  常规" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
-      <label text="亮度  {{d:bv}}%" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
-      <label text="真机亮度  {{d:ob}}%" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
-      <label text="返回" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
+          flex-flow="column" flex-cross="center" row-gap="0" padding-top="7">
+      <view floating="true" left="14" top="{{tb.tt[d:m].n}}" width="236" height="32" border-width="2" border-color="#FFFFFF" radius="6" />
+      <label text="字号  {{fs}}" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
+      <label a:if="{{fw == 700}}" text="粗细  粗体" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
+      <label a:else="" text="粗细  常规" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="亮度  {{bv}}%" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="真机亮度  {{ob}}%" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="段落标记  {{tb.ml[ms].n}}" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="返回" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
     </view>
 
     <!-- 主菜单：盖在正文中间；高亮框随 m 移动 -->
-    <view a:elif="{{d:m > 0}}" floating="true" left="186" top="28" width="268" height="242"
+    <view a:elif="{{d:m > 0}}" floating="true" left="186" top="44" width="268" height="210"
           bg-color="#000000" bg-opa="255" border-width="2" border-color="#A0A0A0" radius="10"
           flex-flow="column" flex-cross="center" row-gap="0" padding-top="7">
       <!-- 高亮框：位置查表。不用 top="{{d:m * 32 - 32}}"：模拟器里只算第一个运算符（得 m*32）。
            floating 子元素的 left/top 从父容器内边距以内算起。 -->
-      <view floating="true" left="14" top="{{tt[d:m].n}}" width="236" height="32" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view floating="true" left="14" top="{{tb.tt[d:m].n}}" width="236" height="32" border-width="2" border-color="#FFFFFF" radius="6" />
       <label text="返回阅读" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
-      <label a:if="{{ls == 2}}" text="停止智能翻页" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
-      <label a:else="" text="智能翻页" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="{{tb.mz[ls].n}}" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
       <label a:if="{{d:p > 0}}" text="停止自动翻页" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
       <label a:else="" text="自动翻页" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
       <label text="显示设置" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
-      <label a:if="{{ls == 1}}" text="停止听书" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
-      <label a:else="" text="听书" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
-      <label text="下一章" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
-      <label text="上一章" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="{{tb.mh[ls].n}}" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
+      <label text="章节跳转" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
     </view>
 
     <!-- 亮度：上面盖半透明黑色，改亮度不用服务端，必须放在最后。屏幕灰度低于约 30 就不发光，笔画边缘更早消失（字被“侵蚀”），
          亮度 10% 时正文灰度留约 52，再低笔画就断了；页眉页脚和两栏的字本来就暗，遮得少一些。书名图不暗，和正文遮得一样多。
          表达式只认整数：* 0.5 算出来是 0，超出 0～255 会回绕。
          正文遮罩下沿在 272：末行的标点和拉丁字母下伸到 y=271，再往下就切到从 y=272 开始的页码 -->
-    <view floating="true" left="81" top="28" width="478" height="244" bg-color="#000000" bg-opa="{{d:lv * 22}}" />
-    <view floating="true" left="81" top="0" width="478" height="28" bg-color="#000000" bg-opa="{{d:lv * 15}}" />
-    <view floating="true" left="81" top="272" width="478" height="18" bg-color="#000000" bg-opa="{{d:lv * 15}}" />
-    <view floating="true" left="0" top="0" width="80" height="197" bg-color="#000000" bg-opa="{{d:lv * 22}}" />
-    <view floating="true" left="0" top="197" width="80" height="93" bg-color="#000000" bg-opa="{{d:lv * 15}}" />
-    <view floating="true" left="80" top="0" width="1" height="290" bg-color="#000000" bg-opa="{{d:lv * 15}}" />
-    <view floating="true" left="559" top="0" width="81" height="290" bg-color="#000000" bg-opa="{{d:lv * 15}}" />
+    <view floating="true" left="0" top="0" width="640" height="290" bg-color="#000000" bg-opa="{{lv * 15}}" />
+    <view floating="true" left="81" top="28" width="478" height="244" bg-color="#000000" bg-opa="{{tb.bo[lv].n}}" />
+    <view floating="true" left="0" top="0" width="80" height="197" bg-color="#000000" bg-opa="{{tb.bo[lv].n}}" />
   </view>
 </view>

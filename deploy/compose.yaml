@@ -1,15 +1,16 @@
-# Agent 文字版的云端实例（deploy/cloud/README.md）。放在服务器 /opt/glassreader-text/，和页图版并存。
-# 书库和进度都用页图版那份，两边接着读。只监听回环：公网入口是 OpenResty 上的 /text/（site.https.conf）。
+# glassreader 文字版的容器。在 deploy/ 里运行 docker compose up -d --build：书放 deploy/books/，进度在 deploy/data/。
+# 只监听回环，公网入口是反向代理（site.conf）。
 name: glassreader-text
 
 services:
   reader:
     build:
-      context: ./app
+      context: ..
+      dockerfile: deploy/Dockerfile
     image: glassreader-text:local
     container_name: glassreader-text
     env_file:
-      - ./.env
+      - ../.env
     environment:
       READER_HOST: 0.0.0.0
       READER_PORT: "8780"
@@ -19,8 +20,8 @@ services:
     ports:
       - 127.0.0.1:19517:8780
     volumes:
-      - /opt/glassreader/books:/books:ro
-      - /opt/glassreader/data:/data
+      - ./books:/books:ro
+      - ./data:/data
     restart: unless-stopped
     read_only: true
     tmpfs:

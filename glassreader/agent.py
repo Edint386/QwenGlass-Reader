@@ -23,7 +23,7 @@ import json
 import logging
 import re
 import time
-import unicodedata
+from bisect import bisect_right
 from collections import OrderedDict
 from dataclasses import dataclass, replace
 from functools import lru_cache
@@ -33,8 +33,9 @@ import anyio
 from starlette.responses import JSONResponse
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
+from . import native_font
 from .book import Book
-from .library import BRIGHTNESS_LEVELS, DEFAULT_OPTICS, DEFAULT_PACE, OPTICS_LEVELS, PACES, Library, normalize_title
+from .library import BRIGHTNESS_LEVELS, DEFAULT_OPTICS, DEFAULT_PACE, MARKS, OPTICS_LEVELS, PACES, Library, normalize_title
 from .mcp_tools import ReaderTools
 from .pager import DEFAULT_WEIGHT, INVISIBLE, layout_for, wrap
 
@@ -59,27 +60,33 @@ AGENT_PATH = "/agent"
 SPEC_VERSION = "1.0"
 #: 页面模板的名字：平台的 pages 列表里只有 templateId 和说明，按说明里的这个词认
 PAGE_KEYWORD = "reader-text"
-#: 环上的槽数，和 pages/reader-text/template.xml 一致；当前页前面留 AHEAD 页、后面留 BEHIND 页
+#: 亮度遮罩每档的透明度：四周和正文。屏幕灰度低于约 30 就不发光，所以四周的字本来就暗，遮得少一些
+MASK_OUTER, MASK_BODY = 15, 22
+#: 环上的槽数，和 skill/Pages/reader-text/template.xml 一致；当前页前面留 AHEAD 页、后面留 BEHIND 页
 SLOTS, AHEAD, BEHIND = 8, 4, 3
 #: 原生字号只有固定档位：24 以下有常规字模，28、32 只有粗体
 TEXT_SIZES = (16, 18, 20, 22, 24, 28, 32)
 DEFAULT_TEXT_SIZE = 24
 #: 页面的主菜单是 m = 1～7，每行高 32；显示设置是 m = 11～15，每行高 36
-MAIN_MENU, DISPLAY_MENU = range(1, 8), range(11, 16)
-MAIN_ROW, DISPLAY_ROW = 32, 36
+MAIN_MENU, DISPLAY_MENU = range(1, 7), range(11, 17)
+MAIN_ROW, DISPLAY_ROW = 32, 32
+#: 显示设置里“段落标记”这一行进去的状态，别的行是 m + 10
+MARK_ROW, MARK_PANEL = 15, 19
+#: 自动翻页、智能翻页的数字面板
+PANEL_AUTO, PANEL_SMART = 25, 26
 WEIGHT_NORMAL, WEIGHT_BOLD = 400, 700
 #: 粗体用页图版的第几档粗细（0 起），读取时这一档以上算粗体
 BOLD_WEIGHT = 4
-#: 正文区大小（pages/reader-text），宽度和页图版一样
+#: 正文区大小（skill/Pages/reader-text），宽度和页图版一样
 BODY_WIDTH, BODY_HEIGHT = layout_for(DEFAULT_TEXT_SIZE).text_width, 238
 #: 正文 label 的宽度：比正文区宽的部分留给行尾标点，再宽就被切掉（long-mode="clip" 不折行）
 LABEL_WIDTH = 464
+#: 正文 label 的左边和上边，段落标记按它和行距算位置
+LABEL_LEFT, TEXT_TOP = 14, 30
 #: 原生字体的行距，模拟器里量的，字号 20 每页 9 行压到进度条的现象和它对得上
 LINE_PITCH = {16: 23, 18: 26, 20: 29, 22: 32, 24: 35, 28: 41, 32: 46}
-#: 进度条总宽（pages/reader-text）
+#: 进度条总宽（skill/Pages/reader-text）
 BAR_WIDTH = 380
-#: 不是全角的字按这个比例估宽：估窄了行尾的字超出 label，就被切掉了
-NARROW_RATIO = 0.62
 #: 平台约 120 秒没有业务消息就结束会话
 KEEPALIVE_SECONDS = 90
 #: 这么久没操作就不再保活
@@ -110,16 +117,24 @@ LISTEN_BACK_LIMIT = 120
 LISTEN_IDLE_SECONDS = 7200
 #: 智能翻页：只换圆点的 UPDATE 至少隔这么久。速度快时段落很短，每段发一次太频繁。翻页不受这个限制
 SMART_MIN_SECONDS = 2.0
-#: 正在读的段落用它换掉两格缩进。● 在原生字体里正好一个字宽，后面的字不会动，也不会多折一行
-LISTEN_MARK = "　●"
+#: 段落标记的样式，下标是进度文件里存的数
+MARK_NAMES = ("圆点", "竖线", "下划线", "圆角框")
+MARK_DOT, MARK_BAR, MARK_UNDERLINE, MARK_BOX = MARKS
+#: 标记没显示时的字段：这时不用动它们
+MARK_IDLE = {"dy": TEXT_TOP, "dh": 0, "mx": 0, "mq": 0, "mw": 0, "mg": 0, "mc": "#000000", "mt": ""}
+#: 圆点在各字号下的 (左, 上, 直径)，相对正文 label，模拟器里量的“　●”的墨迹，缩进第二格
+MARK_DOTS = {16: (18, 7, 12), 18: (21, 8, 12), 20: (23, 9, 14), 22: (25, 10, 15), 24: (28, 12, 16), 28: (32, 13, 19), 32: (37, 14, 22)}
+#: 竖线的位置和粗细，圆角框的上下留白
+MARK_BAR_LEFT, MARK_BAR_WIDTH, MARK_PAD = 5, 3, 3
+MARK_COLOR, DOT_COLOR = "#A0A0A0", "#E8E8E8"
 _SENTENCE = re.compile(r".+?(?:[。！？!?…]+[”’」』）)]*|$)", re.S)
-#: 环上每个槽的字段：正文、页码
-SLOT_FIELD = re.compile(r"[sf]\d")
+#: 环上每个槽的字段：正文
+SLOT_FIELD = re.compile(r"s\d")
 #: 翻不动时页面报同一个槽，可能是更新丢了，也可能只是还在路上。全量重发至少隔这么久：卡顿时不能一滑一环
 RESEND_SECONDS = 5.0
 
 
-def _table(values: dict[int, int], size: int) -> list[dict[str, int]]:
+def _table(values: dict[int, Any], size: int) -> list[dict[str, Any]]:
     """页面查表用的数组。元素写成 {n: 值}，和文档的 list[d:i].id 一样；下标没用到的填 0。
     数组只能整个发，所以只放不变的东西：每次翻页会变的东西放进来，每次都要重发整张。"""
     return [{"n": values.get(i, 0)} for i in range(size)]
@@ -138,7 +153,7 @@ def _menu_tables() -> dict[str, list[dict[str, int]]]:
         for i, m in enumerate(menu):
             following[m], previous[m], top[m] = menu[(i + 1) % len(menu)], menu[i - 1], i * row
     size = DISPLAY_MENU[-1] + 1
-    enter = {m: m + 10 for m in DISPLAY_MENU[:-1]} | {DISPLAY_MENU[-1]: 4}  # 调字号这些是 m + 10，最后一项“返回”回主菜单
+    enter = {m: m + 10 for m in DISPLAY_MENU[:-1]} | {MARK_ROW: MARK_PANEL, DISPLAY_MENU[-1]: 4}  # 调字号这些是 m + 10，最后一项“返回”回主菜单
     return {"mn": _table(following, size), "mp": _table(previous, size), "me": _table(enter, size), "tt": _table(top, size)}
 
 
@@ -150,12 +165,40 @@ def _size_tables() -> dict[str, list[dict[str, int]]]:
     return {"up": _table(up, size), "dn": _table(down, size)}
 
 
+def _mark_tables() -> dict[str, list[dict[str, Any]]]:
+    """段落标记的下一种、上一种和名字，首尾相接。下标是样式。"""
+    size = len(MARK_NAMES)
+    names = [{"n": name} for name in MARK_NAMES]
+    return {"ma": _table({i: (i + 1) % size for i in MARKS}, size), "mb": _table({i: (i - 1) % size for i in MARKS}, size), "ml": names}
+
+
+def _text_tables() -> dict[str, list[dict[str, Any]]]:
+    """同一个位置换文字。写成两个元素要多占一个绑定（a:else 也算），所以查表。nm pu pd 的下标是 m，mz mh 的下标是 ls。"""
+    size = PANEL_SMART + 1
+    names = {21: "字号", 22: "粗细", 23: "亮度", 24: "真机", PANEL_AUTO: "自动翻页", PANEL_SMART: "智能翻页"}
+    return {
+        "nm": _table(names, size),
+        "pu": _table({PANEL_AUTO: "秒", PANEL_SMART: "字/秒"}, size),
+        "pd": _table({PANEL_AUTO: "每页停留时间", PANEL_SMART: "每秒阅读字数"}, size),
+        "mz": _table({0: "智能翻页", 1: "智能翻页", 2: "停止智能翻页"}, 3),
+        "mh": _table({0: "听书", 1: "停止听书", 2: "听书"}, 3),
+    }
+
+
+def _mask_table() -> dict[str, list[dict[str, int]]]:
+    """亮度遮罩分两层：全屏一层 lv * MASK_OUTER，正文和书名上再叠一层，叠完等于 lv * MASK_BODY。这是第二层的透明度，下标是 lv。"""
+    def extra(lv: int) -> int:
+        return round(255 * (1 - (255 - lv * MASK_BODY) / (255 - lv * MASK_OUTER)))
+
+    return {"bo": _table({lv: extra(lv) for lv in range(len(BRIGHTNESS_LEVELS))}, len(BRIGHTNESS_LEVELS))}
+
+
 #: 页面查的表里不变的那些，打开时发一次
-PAGE_TABLES = _ring_tables() | _menu_tables() | _size_tables()
+PAGE_TABLES = _ring_tables() | _menu_tables() | _size_tables() | _mark_tables() | _mask_table() | _text_tables()
 #: 这几个动作之后菜单还开着，别的动作都说明回到正文了
-MENU_STAYS = ("display", "optics", "hidden", "away")
+MENU_STAYS = ("display", "optics", "mark", "hidden", "away")
 #: 页面自己也写的字段，全量重发时不带：它们可能比服务这边新
-PAGE_OWNED = ("ls", "fs", "fw", "i")
+PAGE_OWNED = ("ls", "fs", "fw", "i", "ms", "bv", "lv", "ob")
 #: 调眼镜真实亮度的工具，文档写的名字。可用的工具以 SESSION_INIT.tools 为准
 OPTICS_TOOL = "change_brightness"
 _CHINESE_DIGITS = "零一二三四五六七八九十百千两"
@@ -184,19 +227,33 @@ class TextPage:
     starts: tuple[int, ...] = ()
 
 
-class _NativeWidths(dict[str, float]):
-    """眼镜原生字体的字宽估算：拿不到字体文件，全角按字号，其余偏宽估，宁可少排一点。"""
+class _NativeFont:
+    """按码位查字宽。字体里没有的字眼镜上画成一格空白，不会回退到别的字体，宽度是 ``blank``。"""
 
-    def __init__(self, size: int):
+    def __init__(self, ranges: tuple[tuple[int, int, int], ...], blank: int):
+        self.ranges = ranges
+        self.starts = [start for start, _, _ in ranges]
+        self.blank = blank
+
+    def advance(self, ch: str) -> int:
+        code = ord(ch)
+        i = bisect_right(self.starts, code) - 1
+        return self.ranges[i][2] if i >= 0 and code <= self.ranges[i][1] else self.blank
+
+
+_FONTS = {False: _NativeFont(native_font.REGULAR, native_font.REGULAR_BLANK), True: _NativeFont(native_font.BOLD, native_font.BOLD_BLANK)}
+
+
+class _NativeWidths(dict[str, float]):
+    """眼镜上每个字占多少像素。内核按整像素排，所以四舍五入。"""
+
+    def __init__(self, size: int, bold: bool = False):
         super().__init__()
         self.size = size
+        self.font = _FONTS[bold]
 
     def __missing__(self, ch: str) -> float:
-        if ch in INVISIBLE:
-            w = 0.0
-        else:
-            w = self.size if unicodedata.east_asian_width(ch) in "WFA" else self.size * NARROW_RATIO
-        self[ch] = w
+        self[ch] = w = 0.0 if ch in INVISIBLE else float(round(self.font.advance(ch) * self.size / 1000))
         return w
 
 
@@ -206,12 +263,12 @@ def lines_per_page(size: int) -> int:
 
 
 @lru_cache(maxsize=64)
-def text_pages(book: Book, mtime: float, chapter: int, size: int, anchor: int = 0) -> tuple[TextPage, ...]:
+def text_pages(book: Book, mtime: float, chapter: int, size: int, anchor: int = 0, bold: bool = False) -> tuple[TextPage, ...]:
     """把一章排成原生文字的页。自己断好行（用和页图版一样的禁则），换行符直接写在文字里，每页行数才是确定的。
 
     ``anchor`` 处强制换页：换字号后当前页的第一个字还在页首，代价是它前面那一页可能不满。
     """
-    widths = _NativeWidths(size)
+    widths = _NativeWidths(size, bold)
     per_page = lines_per_page(size)
     lines: list[tuple[int, str]] = []
     for offset, para in book.chapters[chapter].paragraphs:
@@ -281,6 +338,8 @@ def parse_command(text: str) -> tuple[str, str]:
         return "font", "1"
     if re.fullmatch(r"(?:帮我)?(?:把?字[号体]?(?:缩小(?:一?[点些])?|小一?[点些])|缩小字[号体])吧?", t):
         return "font", "-1"
+    if m := re.fullmatch(rf"(?:帮我|请)?(?:把|将|调)?亮度(?:调到|调成|调为|改成|改到|设为|设成|到)?(?:百分之)?([0-9{_CHINESE_DIGITS}]+)[%％]?吧?", t):
+        return "brightness", m.group(1)
     if m := re.fullmatch(rf"(?:{_OPEN}|看|读)?《([^《》]+)》吧?", t):
         return "open", m.group(1)
     if re.fullmatch(rf"{_OPEN}(?:小说|书|小说吧|这本书|眼镜看小说|小说阅读器|文字阅读器|文字阅读|文字版|文字版小说)", t):
@@ -324,7 +383,6 @@ class AgentSession:
         self.size = self.saved_size = DEFAULT_TEXT_SIZE
         self.synced_ts = 0.0  # 这本书的进度上次写入或读到的时间，文件里比它新就是别人写的
         self.bold = False
-        self.page_brightness = 0  # 页面手里的亮度：d:bv 只在打开时取一次 s.b，之后 UPDATE 改不了它，只有用户在页面上改
         self.anchor = self.anchor_chapter = 0
         self.image_prefix = ""
         self.voice_turns = 0
@@ -332,6 +390,8 @@ class AgentSession:
         self.silent = False  # 引擎不发声，是智能翻页。停下后留着，说“继续”时要知道接着哪个
         self.pace = DEFAULT_PACE  # 智能翻页每秒多少字
         self.optics = DEFAULT_OPTICS  # 真机亮度：上次设的数，不是读到的
+        self.mark = 0  # 段落标记的样式
+        self.mark_preview: int | None = None  # 设置面板里正在看的样式，保存后清掉
         self.device_tools: set[str] = set()
         self.optics_warned = False  # 没调成只说一次，连滑时不能句句都播
         self.menu_open = False
@@ -453,8 +513,8 @@ class AgentSession:
             self._release()
         if name == "turn":
             return self._turn(params.get("slot"), params.get("v"))
-        if name in ("next_chapter", "prev_chapter"):
-            return self._command("下一章" if name == "next_chapter" else "上一章")  # 听书时要先停，再从新位置读
+        if name == "chapter":  # z 是第几章。听书时要先停，再从新位置读
+            return self._perform("number", str(params.get("z")), "")
         if name in ("display", "listen", "smart") and not self.listening:
             self._sync()
         if name == "display":
@@ -464,7 +524,10 @@ class AgentSession:
                 return self._drop_held()
             return self._stop_listening() if self.listening and not self.silent else self._engage(False)
         if name == "optics":
+            self.sent["ob"] = params.get("o")  # 页面已经写了，发回去的话连滑时会把它拉回来
             return self._set_optics(params.get("o"))
+        if name == "mark":
+            return self._preview_mark(params.get("k"))
         if name == "smart":  # 面板上确定：已经走着就只换速度。ls 重发一次：页面可能清过，开自动翻页的上报又丢了
             self._set_pace(params.get("z"))
             self.sent.pop("ls", None)
@@ -492,10 +555,12 @@ class AgentSession:
         if delta == 0 and time.monotonic() - self.resent_at >= RESEND_SECONDS:
             # 只有走到环的尽头翻不动才会报同一个槽：这边早到了，更新丢了，或者还在路上。丢了的话页面一直以为到头了
             self.resent_at = time.monotonic()
-            self.sent = {k: v for k, v in self.sent.items() if k in PAGE_OWNED or k in PAGE_TABLES}
+            self.sent = {k: v for k, v in self.sent.items() if k in PAGE_OWNED or k == "tb"}
         self.slot = slot
         if seen in (None, self.voice_turns):  # 页面自己翻过去的，发回去的话连滑时会把它拉回来。没看到服务刚翻的页就要发：那条会把页面带走
             self.sent["i"] = slot
+            if "pn" in self.sent:  # 页面自己加减过了，到头就停
+                self.sent["pn"] = min(max(self.sent["pn"] + delta, 1), self.sent["pt"])
         moved = self._sync()  # 换到了另一个实例留下的那一页，这一滑就算翻到它，再走一页要少看一页
         before = self.chapter, self.page
         if not moved:
@@ -520,7 +585,10 @@ class AgentSession:
                 command = "smart" if self.silent else "listen"  # 暂停后说“继续”是接着读
         if self.listening and not self.silent and command == "help":
             return []  # 读着的时候不接别的话，也不能和别的播报交错
-        if not self.listening or command in ("font", "listen", "smart"):
+        return self._perform(command, argument, text)
+
+    def _perform(self, command: str, argument: str, text: str) -> list[dict[str, Any]]:
+        if not self.listening or command in ("font", "brightness", "listen", "smart"):
             return self._run(command, argument, text)
         # 不能和别的播报交错。智能翻页没有语音流，只有换书和暂停才停
         stopped = self._stop_listening() if not self.silent or command in ("open", "quiet") else []
@@ -529,7 +597,7 @@ class AgentSession:
         again: list[dict[str, Any]] = []
         if self.voice_turns != turns:  # 跳成了。不能比位置：在第一页说“回到开头”也要从头读
             again = self._start_listening(self._current().offset)
-        elif command in ("pages", "chapter", "percent") and not self.silent:  # 没跳成，刚才停了，接着读
+        elif command in ("pages", "chapter", "number", "percent") and not self.silent:  # 没跳成，刚才停了，接着读
             again = self._start_listening(self.listen_resume)
         return [*stopped, *out, *again]
 
@@ -547,7 +615,7 @@ class AgentSession:
             return [self.speak("还没打开书，" + _HELP)]
         # 这些都从当前位置出发。翻页和跳转之后 _command 会让引擎从新位置起步，听书这时已经停了，智能翻页没停；
         # 别的命令引擎不重新起步，走着时不能换位置：页面上的位置和引擎估算的就对不上了
-        if command in ("chapter", "percent", "pages") or (command in ("listen", "smart", "font") and not self.listening):
+        if command in ("chapter", "number", "percent", "pages") or (command in ("listen", "smart", "font") and not self.listening):
             self._sync()
         if command in ("listen", "smart"):
             return self._engage(command == "smart")
@@ -557,6 +625,8 @@ class AgentSession:
             return [self.speak(self.tools.reading_status(self.book.title)["message"])]
         if command == "chapter":
             return self._jump(chapter=argument)
+        if command == "number":
+            return self._jump_to_number(_number(argument))
         if command == "percent":
             number = _number(argument)
             return self._jump(percent=float(number)) if number is not None and number <= 100 else [*self._refresh(), self.speak(_HELP)]
@@ -573,6 +643,8 @@ class AgentSession:
             return self._refresh()
         if command == "font":
             return self._font(int(argument))
+        if command == "brightness":
+            return self._voice_brightness(_number(argument))
         return [self.speak(_HELP)]
 
     def _on_shelf(self, title: str) -> bool:
@@ -599,6 +671,7 @@ class AgentSession:
         self.bold = self.library.display.weight >= BOLD_WEIGHT
         self.pace = self.library.display.pace
         self.optics = self.library.display.optics
+        self.mark = self.library.display.mark
         self.image_prefix = str(result["u"])
         self._load_position()
         out = self._refresh(opening=not self.page_uuid)
@@ -616,7 +689,19 @@ class AgentSession:
         v = self.library.jump(self.book, chapter=chapter, percent=percent)
         if v is None:
             return [*self._refresh(), self.speak(f"没有找到{chapter}")]
-        self._place(v.book.chapters[v.chapter].start if chapter else v.offset)
+        return self._land(v.book.chapters[v.chapter].start if chapter else v.offset)
+
+    def _jump_to_number(self, number: int | None) -> list[dict[str, Any]]:
+        """菜单里选的第几章，只数有正文的章。标题里的编号可能不连续，页面只会加减，比不了这些。"""
+        assert self.book is not None
+        readable = self.book.readable()
+        if number is None or not 1 <= number <= len(readable):
+            return self._refresh()
+        return self._land(self.book.chapters[readable[number - 1]].start)
+
+    def _land(self, offset: int) -> list[dict[str, Any]]:
+        assert self.book is not None
+        self._place(offset)
         self.voice_turns += 1
         self._save()
         title = self.book.chapters[self.chapter].base_title
@@ -631,22 +716,34 @@ class AgentSession:
         self._save()
         return self._refresh()
 
+    def _voice_brightness(self, level: int | None) -> list[dict[str, Any]]:
+        """一个数同时定两个亮度，越大越亮。0～9 真机 0，软件 10%～100%；10～100 软件满，真机就是这个数，
+        取整十：页面一步走 10，不是整十就走过了头。"""
+        if level is None or level > 100:
+            return []
+        self.library.set_display(brightness=min(level + 1, 10) * 10)
+        return [*self._set_optics(0 if level < 10 else (level + 5) // 10 * 10), *self._refresh()]
+
     def _display(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         """页面发来的显示设置，都是绝对值：连滑时后到的覆盖先到的，不认识的值不用。
         只存变了的几项，别的留给文件里最新的值：另一个实例可能刚存过。"""
         assert self.book is not None
-        offset, size, saved = self._current().offset, self.size, self.saved_size
+        offset, size, bold, saved = self._current().offset, self.size, self.bold, self.saved_size
         changes: dict[str, int] = {}
         if params.get("f") in TEXT_SIZES and params["f"] != self.sent.get("fs", self.size):  # 页面每次都带 f，没改就留着页图版的 26、30
             self.size = self.saved_size = params["f"]
         if params.get("w") in (WEIGHT_NORMAL, WEIGHT_BOLD) and (params["w"] == WEIGHT_BOLD) != self.bold:
             self.bold = params["w"] == WEIGHT_BOLD
             changes["weight"] = BOLD_WEIGHT if self.bold else DEFAULT_WEIGHT  # 没切换就留着页图版的六档粗细
-        if params.get("b") in BRIGHTNESS_LEVELS and params["b"] != self.page_brightness:  # 页面每次都带 b，没改就留着另一边的
-            self.page_brightness = changes["brightness"] = params["b"]
+        self.mark_preview = None
+        if params.get("k") in MARKS and params["k"] != self.mark:
+            self.mark = changes["mark"] = params["k"]
+        if params.get("b") in BRIGHTNESS_LEVELS and params["b"] != self.sent.get("bv"):  # 页面每次都带 b，没改就留着另一边的
+            changes["brightness"] = self.sent["bv"] = params["b"]
+            self.sent["lv"] = (100 - params["b"]) // 10
         if changes:
             self.library.set_display(**changes)
-        if self.size != size:
+        if (self.size, self.bold) != (size, bold):  # 两种粗细的字宽不一样，要重新分页
             self._place(offset)
         if (self.size, self.saved_size) != (size, saved):  # 没改字号就没有要存进这本书的：存一下会刷新最近阅读，引擎走着时还会盖掉另一边
             self._save()
@@ -681,7 +778,7 @@ class AgentSession:
         self.library.set_display(pace=pace)
 
     def _set_optics(self, value: Any) -> list[dict[str, Any]]:
-        """用户在页面上改了真机亮度。工具没下发时页面上的数白改，说一声。"""
+        """用户改了真机亮度。工具没下发时页面上的数白改，说一声。"""
         if type(value) is not int or value not in OPTICS_LEVELS or value == self.optics:
             return []
         self.optics = value
@@ -855,15 +952,50 @@ class AgentSession:
             self._save()
         return moved
 
-    def _page_text(self, page: TextPage) -> str:
-        """听书时正在读的段落前面有个点；从段落中间接着读时没有缩进，就不标了。"""
-        if not self.listening or self.listen_para not in page.starts:
-            return page.text
-        lines = page.text.split("\n")
-        i = page.starts.index(self.listen_para)
-        if lines[i].startswith("　　"):
-            lines[i] = LISTEN_MARK + lines[i][2:]
-        return "\n".join(lines)
+    def _preview_mark(self, style: Any) -> list[dict[str, Any]]:
+        """设置面板里看标记的样子，单击保存才存。ms 页面已经写了，发回去的话连滑时会把它拉回来。"""
+        if style not in MARKS:
+            return []
+        self.mark_preview = self.sent["ms"] = style
+        return self._refresh()
+
+    def _marked_lines(self, slot: int, page: TextPage) -> tuple[list[int], bool]:
+        """这一页要标哪几行，第一行是不是段首。没在读时预览：拿当前页的第一段示范。"""
+        texts = page.text.split("\n")
+        if self.listening:
+            following = max(self.listen_at, self.listen_para + 1)  # 刚起步时还没算到下一段
+            lines = [i for i, start in enumerate(page.starts) if self.listen_para <= start < following]
+            return lines, bool(lines) and page.starts[lines[0]] == self.listen_para and texts[lines[0]].startswith("　　")
+        if self.mark_preview is None or slot != self.slot:
+            return [], False
+        heads = [i for i, text in enumerate(texts) if text.startswith("　　")]
+        first = heads[0] if heads else 0
+        return list(range(first, next((i for i in heads if i > first), len(texts)))), bool(heads)
+
+    def _mark_fields(self, slot: int, page: TextPage) -> dict[str, Any] | None:
+        """这一页的段落标记。圆点和下划线的缩进都要段首；从段落中间接着读时没有缩进，圆点就不标了。"""
+        lines, opening = self._marked_lines(slot, page)
+        style = self.mark if self.mark_preview is None else self.mark_preview
+        if not lines or (style == MARK_DOT and not opening):
+            return None
+        pitch, texts = LINE_PITCH[self.size], page.text.split("\n")
+        fields = {**MARK_IDLE, "ds": slot, "dy": TEXT_TOP + lines[0] * pitch, "dh": len(lines) * pitch + MARK_PAD}
+        if style == MARK_DOT:
+            left, top, size = MARK_DOTS[self.size]
+            return fields | {"mx": LABEL_LEFT + left, "mq": top, "mw": size, "mg": size, "mc": DOT_COLOR}
+        if style == MARK_BAR:
+            return fields | {"mx": MARK_BAR_LEFT, "mq": MARK_PAD, "mw": MARK_BAR_WIDTH, "mg": len(lines) * pitch - 2, "mc": MARK_COLOR}
+        if style == MARK_UNDERLINE:
+            fields["mt"] = "\n".join(self._blanks(texts[i]) for i in lines)
+            if opening:  # 空格上也有下划线，缩进要盖住
+                fields |= {"mx": LABEL_LEFT - 6, "mw": self.size * 2 + 6, "mg": pitch}
+        return fields
+
+    def _blanks(self, line: str) -> str:
+        """和这一行一样长的空格：下划线跟着长度走，字不用画第二遍，画两遍会变粗。"""
+        widths = _NativeWidths(self.size, self.bold)
+        width = sum(widths[c] for c in line)
+        return "　" * int(width // self.size) + " " * int(width % self.size // widths[" "])
 
     def _passage(self, offset: int) -> tuple[str, int] | None:
         """从 offset 取一个段落（章首带上章节名），返回 (文字, 下一段的开头)，书读完了返回 None。"""
@@ -892,7 +1024,7 @@ class AgentSession:
     def _chapter_pages(self, chapter: int) -> tuple[TextPage, ...]:
         assert self.book is not None
         anchor = self.anchor if chapter == self.anchor_chapter else 0
-        return text_pages(self.book, self.book.mtime, chapter, self.size, anchor)
+        return text_pages(self.book, self.book.mtime, chapter, self.size, anchor, self.bold)
 
     def _current(self) -> TextPage:
         return self._chapter_pages(self.chapter)[self.page]
@@ -971,12 +1103,16 @@ class AgentSession:
 
     def _slot_data(self) -> dict[str, Any]:
         assert self.book is not None
-        settings = self.library.page_settings(self.book)
+        brightness = self.library.display.brightness
+        readable = self.book.readable()
+        ring: list[tuple[int, int, TextPage]] = []
         data: dict[str, Any] = {
-            **PAGE_TABLES,
+            "tb": PAGE_TABLES,  # 放在一个键里：内核的数据键最多 64 个，见 research.md §11.22
             "t": self.book.title,
             "u": self.image_prefix,
-            "s": {"b": settings["b"], "o": settings["o"], "lv": (100 - settings["b"]) // 10, "ob": self.optics},
+            "bv": brightness,
+            "lv": (100 - brightness) // 10,
+            "ob": self.optics,
             "fs": self.size,
             "fw": WEIGHT_BOLD if self.bold else WEIGHT_NORMAL,
             "i": self.slot,
@@ -989,17 +1125,28 @@ class AgentSession:
             "hd": self.book.chapters[self.chapter].title,
             "bar": BAR_WIDTH * self.book.percent(self._current().offset) // 100,
             "pc": f"{self.book.percent(self._current().offset)}%",
+            "cn": bisect_right(readable, self.chapter),
+            "cc": len(readable),
+            "pn": self.page + 1,
+            "pt": len(self._chapter_pages(self.chapter)),
+            "ms": self.mark if self.mark_preview is None else self.mark_preview,
+            "ds": SLOTS,
+            **{k: self.sent.get(k, v) for k, v in MARK_IDLE.items()},
         }
         for k in range(-BEHIND, AHEAD + 1):
             slot = (self.slot + k) % SLOTS
             position = self._walk(k)
             if position is None:
-                data[f"s{slot}"], data[f"f{slot}"] = "", "全书完" if k > 0 else ""
+                data[f"s{slot}"] = "全书完" if k > 0 else ""
                 continue
             chapter, page = position
-            pages = self._chapter_pages(chapter)
-            data[f"s{slot}"] = self._page_text(pages[page])
-            data[f"f{slot}"] = f"{page + 1} / {len(pages)}"
+            text_page = self._chapter_pages(chapter)[page]
+            data[f"s{slot}"] = text_page.text
+            ring.append((abs(k), slot, text_page))
+        for _, slot, text_page in sorted(ring, key=lambda r: r[0]):  # 段落跨页时标在离当前页最近的一页
+            if (fields := self._mark_fields(slot, text_page)) is not None:
+                data |= fields
+                break
         return data
 
     def _refresh(self, *, opening: bool = False) -> list[dict[str, Any]]:
@@ -1009,7 +1156,6 @@ class AgentSession:
             self._pages += 1
             self.page_uuid = f"reader-{self.id}-{self._pages}"[:128]
             self.sent = dict(data)
-            self.page_brightness = data["s"]["b"]
             return [self._show("OPEN", data)]
         changed = {k: v for k, v in data.items() if self.sent.get(k) != v}
         self.sent.update(changed)
