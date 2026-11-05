@@ -2,7 +2,7 @@
   <!-- 小说阅读页（原型，reader/docs/research.md §4）。dataSource：{"u": "<服务地址>/r/<key>/<书>/<会话>", "t": "书名", "s": 显示设置}，由 open_book / jump 返回
        正文和左栏书名是电脑端渲染好的图；其余侧栏和菜单是原生控件，按键立即响应。
        计数器只增不减（a 下一页 b 上一页 j 往后跳的章数 k 往前跳的章数 z 自动翻页），电脑端按差值移动阅读位置。
-       m：0 = 阅读，1～4 = 主菜单选中第 m 项，11～15 = 显示设置菜单选中第 m - 10 项，21～24 = 调字号、粗细、亮度、行距，25 = 自动翻页设置，26 = 章节跳转。
+       m：0 = 阅读，1～4 = 主菜单选中第 m 项，11～14 = 显示设置菜单的字号、粗细、亮度、行距，15 = 它的“返回”（和主菜单一样排在最上面，进菜单先停在这里），21～24 = 调字号、粗细、亮度、行距，25 = 自动翻页设置，26 = 章节跳转。
        cn cb：章节跳转面板上往后、往前各几章，总有一个是 0。页面不知道现在是第几章，面板上的章名是服务按这两个数画的图（goto-….png），
        单击时加进 j k，和以前的“下一章”“上一章”走同一条路，到头由服务停住。
        fv wv bv sv：设置面板上的字号、粗细、亮度、行距，op：亮度遮罩的透明度；
@@ -26,7 +26,7 @@
   <key-event a:elif="{{d:m > 10}}" on-key-enter="data://update?m={{d:m + 10}}" on-key-next="data://update?m={{d:m + 1}}" on-key-prev="data://update?m={{d:m - 1}}" />
   <key-event a:elif="{{d:m == 1}}" on-key-enter="data://update?c={{d:p}}&amp;m=0" on-key-next="data://update?m=2" on-key-prev="data://update?m=4" />
   <key-event a:elif="{{d:m == 2}}" on-key-enter="emit://event/auto?" on-key-next="data://update?m=3" on-key-prev="data://update?m=1" />
-  <key-event a:elif="{{d:m == 3}}" on-key-enter="data://update?m=11" on-key-next="data://update?m=4" on-key-prev="data://update?m=2" />
+  <key-event a:elif="{{d:m == 3}}" on-key-enter="data://update?m=15" on-key-next="data://update?m=4" on-key-prev="data://update?m=2" />
   <!-- 章节跳转：从当前章开始，滑动在往后、往前之间来回，单击才跳 -->
   <key-event a:else="" on-key-enter="data://update?cn=0&amp;cb=0&amp;m=26" on-key-next="data://update?m=1" on-key-prev="data://update?m=3" />
   <event match="event://up21?" a:if="{{d:fv != 32}}" action="data://update?fv={{d:fv + 2}}&amp;uf={{d:fv + 2}}" />
@@ -155,20 +155,21 @@
     <!-- 占位：调显示设置时不盖住正文，也不能落到下面的菜单分支 -->
     <view a:elif="{{d:m > 20}}" floating="true" left="0" top="0" width="1" height="1" />
 
-    <!-- 显示设置菜单：每项后面是当前值；调好保存后回到这里，方便接着调别的 -->
+    <!-- 显示设置菜单：“返回”排在最上面，和主菜单的“返回阅读”一样，进来先停在它上面。m 的编号没变（15 是返回），
+         首尾相接，所以滑动的去向不用改。每项后面是当前值；调好保存后回到这里，方便接着调别的 -->
     <view a:elif="{{d:m > 10}}" floating="true" left="186" top="44" width="268" height="202"
           bg-color="#000000" bg-opa="255" border-width="2" border-color="#5A5A5A" radius="10"
           flex-flow="column" flex-cross="center" row-gap="0" padding-top="9">
-      <view a:if="{{d:m == 11}}" floating="true" left="14" top="0" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
-      <view a:if="{{d:m == 12}}" floating="true" left="14" top="36" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
-      <view a:if="{{d:m == 13}}" floating="true" left="14" top="72" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
-      <view a:if="{{d:m == 14}}" floating="true" left="14" top="108" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
-      <view a:if="{{d:m == 15}}" floating="true" left="14" top="144" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 15}}" floating="true" left="14" top="0" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 11}}" floating="true" left="14" top="36" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 12}}" floating="true" left="14" top="72" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 13}}" floating="true" left="14" top="108" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <view a:if="{{d:m == 14}}" floating="true" left="14" top="144" width="236" height="36" border-width="2" border-color="#FFFFFF" radius="6" />
+      <label text="返回" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
       <label text="字号  {{d:fv}}" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
       <label text="粗细  {{d:wv}}/6" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
       <label text="亮度  {{d:bv}}%" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
       <label text="行距  {{d:sv}}%" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
-      <label text="返回" width="236" height="36" font-size="22" color="#FFFFFF" text-align="center" />
     </view>
 
     <!-- 主菜单：盖在正文中间；高亮框随 m 移动 -->
