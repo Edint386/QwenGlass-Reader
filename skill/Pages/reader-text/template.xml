@@ -1,6 +1,6 @@
 <view xmlns:a="waft://dsl" width="100%" height="100%" flex-flow="row" flex-cross="start" column-gap="0" bg-color="#000000">
   <!-- reader-text：Agent 文字传输版的阅读页（docs/agent.md），正文是原生文字，比 pages/reader 多听书和智能翻页，没有行距。服务端用 SHOW_UI 推数据。
-       u t：书名图地址前缀、书名。s：打开时的亮度和真机亮度。v：语音翻页次数。bar：进度条宽度。pc：百分比。ls：0 = 都没开，1 = 听书（菜单把它停下时也是 1），2 = 智能翻页。fs fw：字号、字重（400 常规、700 粗体）。
+       t：书名，保活时重发它。tr：左栏竖排书名每一行的字（agent.py 的 title_rows），两列时一行是“左字、全角空格、右字”。s：打开时的亮度和真机亮度。v：语音翻页次数。bar：进度条宽度。pc：百分比。ls：0 = 都没开，1 = 听书（菜单把它停下时也是 1），2 = 智能翻页。fs fw：字号、字重（400 常规、700 粗体）。
        zs：智能翻页每秒字数。end：1 = 没有下一页。
        s0～s7：环上八个槽的正文。hd：当前章节名，只有一份，章节变了才发，翻过章节时比正文晚一点，换来少发和少占绑定。i 是当前显示的槽：
        翻页只改 i，立即响应，再上报新的槽号，服务端记进度并补上离得远的槽。i 放在主数据里，听书、智能翻页、语音翻页时服务也写它，这样服务翻页也只补一格。
@@ -12,7 +12,7 @@
        查表省根节点和绑定：数组元素都是 {n: 值}，写 {{tb.nx[i].n}}，表都在 tb 这一个键里（数据键上限 64）。nx pv：环上的下一个、上一个槽，下标是 i。mn mp me：菜单里前滑、后滑、单击去哪，tt：菜单高亮框的 top，下标都是 m。up dn：字号的上下一档，下标是 fs，到头是它自己。
        这几张表不变，只在打开时发。数组只能整个发，所以每次翻页会变的东西不要放进数组：只改一格也要重发八格。
        没有行距设置：原生 label 没有行距属性；一行一个 label 又会超过 128 个绑定（a:for 每行都算，隐藏的槽也算）。
-       m：0 = 阅读，1～6 = 主菜单选中第 m 项，11～16 = 显示设置菜单选中第 m - 10 项，19 = 选段落标记，21～24 = 调字号、粗细、亮度、真机亮度，25 = 自动翻页设置，26 = 智能翻页设置，20 = 章节跳转。
+       m：0 = 阅读，1～6 = 主菜单选中第 m 项，11～15 = 显示设置菜单的字号、粗细、亮度、真机亮度、段落标记，16 = 它的“返回”（和主菜单一样排在最上面，进菜单先停在这里），19 = 选段落标记，21～24 = 调字号、粗细、亮度、真机亮度，25 = 自动翻页设置，26 = 智能翻页设置，20 = 章节跳转。
        菜单打开、回到正文都上报：听书和智能翻页在服务端走，要它们停下。
        bv：亮度，lv：亮度档位，100% 是 0，每低 10% 加 1，遮罩透明度按它算。字号、粗细、亮度滑动时在页面里改，立刻生效，单击保存才上报：上报一圈要约 2 秒。字号变了，断行要等服务端重新分页。
        ob：真机亮度，页面只记数，读不到眼镜的真实值。bv lv ob 在主数据里，语音才调得了。只在滑动改了的时候上报，服务端才调用工具，打开页面不下发。
@@ -107,17 +107,26 @@
     <event match="event://e2?" a:else="" action="data://update?nv={{zs}}&amp;nl=2&amp;nh=60&amp;ns=2&amp;m=26" />
     <event match="event://e3?" a:if="{{d:p > 0}}" action="emit://event/move?m=0&amp;p=0&amp;n=menu_close" />
     <event match="event://e3?" a:else="" action="data://update?nv={{d:s}}&amp;nl=0&amp;nh=30&amp;ns=1&amp;m=25" />
-    <event match="event://e4?" action="data://update?m=11" />
+    <event match="event://e4?" action="data://update?m=16" />
     <!-- 章节跳转：数字在页面里加减，滑动立刻显示，单击才上报。cn cc：现在第几章、一共几章，只数有正文的章。没改就是回到正文 -->
     <event match="event://e6?" action="data://update?nv={{cn}}&amp;nl=1&amp;nh={{cc}}&amp;ns=1&amp;m=20" />
     <event match="event://start20?" a:if="{{d:nv == cn}}" action="emit://event/move?m=0&amp;p={{d:p}}&amp;n=menu_close" />
     <event match="event://start20?" a:else="" action="emit://event/move?m=0&amp;p={{d:p}}&amp;n=chapter" />
     <event match="event://start26?" a:if="{{d:nv == d:nl}}" action="emit://event/move?m=0&amp;p={{d:p}}&amp;n=menu_close" />
     <event match="event://start26?" a:else="" action="emit://event/move?m=0&amp;p=0&amp;n=smart" />
-    <!-- 左栏：书名 + 时间 + 连接状态。书名是服务端排好的图：长书名要缩小排两列，原生控件算不出字数 -->
+    <!-- 左栏：书名 + 时间 + 连接状态。书名是原生文字，竖排：页面算不出字数、拆不了列，每行的字由服务排好（tr）。
+         一行一个标签，行距 24 由这里定：原生文字调不了行距，一列一个标签的话 20 号要隔 29 像素一行，太松。
+         标签比行距高（30），下伸的笔画不会被切；空行是空串。字色和以前的书名图（纯白压到 210）一样亮，不比正文亮 -->
     <view width="80" height="290" flex-flow="column" flex-cross="center" padding-top="16" row-gap="10">
-      <!-- 书名图是纯白的，opa 压一点，不比正文亮 -->
-      <image src="{{u}}/title.png" width="72" height="176" opa="210" />
+      <view width="72" height="176">
+        <label text="{{tr[0].n}}" floating="true" left="0" top="0" width="72" height="30" font-size="20" color="#D2D2D2" text-align="center" long-mode="clip" />
+        <label text="{{tr[1].n}}" floating="true" left="0" top="24" width="72" height="30" font-size="20" color="#D2D2D2" text-align="center" long-mode="clip" />
+        <label text="{{tr[2].n}}" floating="true" left="0" top="48" width="72" height="30" font-size="20" color="#D2D2D2" text-align="center" long-mode="clip" />
+        <label text="{{tr[3].n}}" floating="true" left="0" top="72" width="72" height="30" font-size="20" color="#D2D2D2" text-align="center" long-mode="clip" />
+        <label text="{{tr[4].n}}" floating="true" left="0" top="96" width="72" height="30" font-size="20" color="#D2D2D2" text-align="center" long-mode="clip" />
+        <label text="{{tr[5].n}}" floating="true" left="0" top="120" width="72" height="30" font-size="20" color="#D2D2D2" text-align="center" long-mode="clip" />
+        <label text="{{tr[6].n}}" floating="true" left="0" top="144" width="72" height="30" font-size="20" color="#D2D2D2" text-align="center" long-mode="clip" />
+      </view>
       <view width="36" height="1" bg-color="#3A3A3A" />
       <!-- 时间随每次绑定刷新更新；不用 tick：真机上图片没加载完时，每次刷新都会让它重新加载，
            所以关闭自动翻页时页面完全不刷新 -->
@@ -240,18 +249,19 @@
     <!-- 占位：调显示设置和跳章节时不盖住正文，也不能落到下面的菜单分支 -->
     <view a:elif="{{d:m > 18}}" floating="true" left="0" top="0" width="1" height="1" />
 
-    <!-- 显示设置菜单：每项后面是当前值；调好保存后回到这里，方便接着调别的 -->
+    <!-- 显示设置菜单：“返回”排在最上面，和主菜单一样，进来先停在它上面；高亮框的位置查 tt 表（agent.py 的 DISPLAY_ORDER）。
+         每项后面是当前值；调好保存后回到这里，方便接着调别的 -->
     <view a:elif="{{d:m > 10}}" floating="true" left="186" top="44" width="268" height="210"
           bg-color="#000000" bg-opa="255" border-width="2" border-color="#A0A0A0" radius="10"
           flex-flow="column" flex-cross="center" row-gap="0" padding-top="7">
       <view floating="true" left="14" top="{{tb.tt[d:m].n}}" width="236" height="32" border-width="2" border-color="#FFFFFF" radius="6" />
+      <label text="返回" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
       <label text="字号  {{fs}}" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
       <label a:if="{{fw == 700}}" text="粗细  粗体" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
       <label a:else="" text="粗细  常规" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
       <label text="亮度  {{bv}}%" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
       <label text="真机亮度  {{ob}}%" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
       <label text="段落标记  {{tb.ml[ms].n}}" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
-      <label text="返回" width="236" height="32" font-size="22" color="#FFFFFF" text-align="center" />
     </view>
 
     <!-- 主菜单：盖在正文中间；高亮框随 m 移动 -->
@@ -271,7 +281,7 @@
     </view>
 
     <!-- 亮度：上面盖半透明黑色，改亮度不用服务端，必须放在最后。屏幕灰度低于约 30 就不发光，笔画边缘更早消失（字被“侵蚀”），
-         亮度 10% 时正文灰度留约 52，再低笔画就断了；页眉页脚和两栏的字本来就暗，遮得少一些。书名图不暗，和正文遮得一样多。
+         亮度 10% 时正文灰度留约 52，再低笔画就断了；页眉页脚和两栏的字本来就暗，遮得少一些。书名不暗，和正文遮得一样多。
          表达式只认整数：* 0.5 算出来是 0，超出 0～255 会回绕。
          正文遮罩下沿在 272：末行的标点和拉丁字母下伸到 y=271，再往下就切到从 y=272 开始的页码 -->
     <view floating="true" left="0" top="0" width="640" height="290" bg-color="#000000" bg-opa="{{lv * 15}}" />

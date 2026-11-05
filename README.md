@@ -59,7 +59,7 @@
 | 变量 | 说明 |
 |---|---|
 | `READER_TOKEN` | 平台 Agent 插件的 Bearer Token，WebSocket `/agent` 用它鉴权。不填每次启动随机生成，平台插件会失效 |
-| `READER_KEY` | 图片地址里的随机段（书名图）：眼镜发不了请求头，只能靠路径鉴权。只用字母、数字、`-` 和 `_` |
+| `READER_KEY` | 页图版图片地址里的随机段，文字版用不到，留空就行 |
 | `READER_PUBLIC_URL` | 眼镜和平台访问的公网根地址，如 `https://reader.example.com`，可以带路径前缀 |
 | `READER_BOOKS_DIR` | TXT 书库目录，递归收集 `*.txt`，扩展名不分大小写（默认 `~/Books`） |
 | `READER_STATE_FILE` | 进度文件（默认 `~/Library/Application Support/glassreader/progress.json`） |
@@ -70,7 +70,7 @@ TXT 支持 UTF-8 和 GBK/GB18030，章节标题自动识别（“第 N 章”“
 
 ### 第二步：部署到服务器
 
-1. 在仓库根目录复制 `.env.example` 为 `.env`，填 `READER_TOKEN`、`READER_KEY`（各一串随机字符），`READER_PUBLIC_URL` 填你的域名。
+1. 在仓库根目录复制 `.env.example` 为 `.env`，填 `READER_TOKEN`（一串随机字符），`READER_PUBLIC_URL` 填你的域名。
 2. 准备书库和进度目录。容器里的用户是 10001，进度目录要它能写：
 
    ```bash
@@ -84,7 +84,7 @@ TXT 支持 UTF-8 和 GBK/GB18030，章节标题自动识别（“第 N 章”“
    ```
 
    服务只监听本机的 `127.0.0.1:19517`，根文件系统只读，内存上限 256 MB。
-4. 反向代理照 `deploy/site.conf` 配：80 端口只放行证书校验，443 只转发 `/healthz`、`/r/`（书名图）、`/agent`（平台连进来的 WebSocket，要转发 `Upgrade`），其余 404。示例里证书和日志的路径是 1Panel OpenResty 的写法，按你的服务器改。
+4. 反向代理照 `deploy/site.conf` 配：80 端口只放行证书校验，443 只转发 `/healthz` 和 `/agent`（平台连进来的 WebSocket，要转发 `Upgrade`），其余 404。示例里证书和日志的路径是 1Panel OpenResty 的写法，按你的服务器改。
 5. 打开 `https://你的域名/healthz`，返回 `ok` 就通了。
 
 和页图版一起用时，两个容器挂同一个 `books/` 和 `data/`，进度共用。两边写进度前都先加文件锁，所以这个目录要在同一台机器的本地磁盘上。
@@ -168,7 +168,7 @@ uv run glassreader serve --books ~/Books --state .state/progress.json
 | 单击 | 打开菜单 | 返回阅读、智能翻页、自动翻页、显示设置、听书、章节跳转 |
 | 双击 | 底部提示“再双击一次退出”，再双击退出 | 同左 |
 
-显示设置里能调字号（16、18、20、22、24、28、32）、粗细（常规、粗体）、亮度（遮罩，10%～100%）、真机亮度（眼镜本身，0～100）和听书时的段落标记。滑动时立即预览，单击保存。
+显示设置里（最上面一项是返回）能调字号（16、18、20、22、24、28、32）、粗细（常规、粗体）、亮度（遮罩，10%～100%）、真机亮度（眼镜本身，0～100）和听书时的段落标记。滑动时立即预览，单击保存。
 
 ## 语音指令
 

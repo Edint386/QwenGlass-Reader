@@ -67,8 +67,10 @@ SLOTS, AHEAD, BEHIND = 8, 4, 3
 #: 原生字号只有固定档位：24 以下有常规字模，28、32 只有粗体
 TEXT_SIZES = (16, 18, 20, 22, 24, 28, 32)
 DEFAULT_TEXT_SIZE = 24
-#: 页面的主菜单是 m = 1～7，每行高 32；显示设置是 m = 11～15，每行高 36
+#: 页面的主菜单是 m = 1～6，显示设置是 m = 11～16（16 是“返回”），每行高都是 32
 MAIN_MENU, DISPLAY_MENU = range(1, 7), range(11, 17)
+#: 显示设置从上到下的顺序：“返回”和主菜单的“返回阅读”一样排在最上面，进菜单先停在它上面。m 的编号不变，首尾相接的去向也不变
+DISPLAY_ORDER = (DISPLAY_MENU[-1], *DISPLAY_MENU[:-1])
 MAIN_ROW, DISPLAY_ROW = 32, 32
 #: 显示设置里“段落标记”这一行进去的状态，别的行是 m + 10
 MARK_ROW, MARK_PANEL = 15, 19
@@ -149,11 +151,11 @@ def _ring_tables() -> dict[str, list[dict[str, int]]]:
 def _menu_tables() -> dict[str, list[dict[str, int]]]:
     """菜单首尾相接，高亮框的位置也查表：页面的表达式只能有一个运算符，算不了这些。"""
     following, previous, top = {}, {}, {}
-    for menu, row in ((MAIN_MENU, MAIN_ROW), (DISPLAY_MENU, DISPLAY_ROW)):
+    for menu, row in ((MAIN_MENU, MAIN_ROW), (DISPLAY_ORDER, DISPLAY_ROW)):
         for i, m in enumerate(menu):
             following[m], previous[m], top[m] = menu[(i + 1) % len(menu)], menu[i - 1], i * row
     size = DISPLAY_MENU[-1] + 1
-    enter = {m: m + 10 for m in DISPLAY_MENU[:-1]} | {MARK_ROW: MARK_PANEL, DISPLAY_MENU[-1]: 4}  # 调字号这些是 m + 10，最后一项“返回”回主菜单
+    enter = {m: m + 10 for m in DISPLAY_MENU[:-1]} | {MARK_ROW: MARK_PANEL, DISPLAY_MENU[-1]: 4}  # 调字号这些是 m + 10，“返回”（16）回主菜单
     return {"mn": _table(following, size), "mp": _table(previous, size), "me": _table(enter, size), "tt": _table(top, size)}
 
 
@@ -255,6 +257,44 @@ class _NativeWidths(dict[str, float]):
     def __missing__(self, ch: str) -> float:
         self[ch] = w = 0.0 if ch in INVISIBLE else float(round(self.font.advance(ch) * self.size / 1000))
         return w
+
+
+#: 左栏书名占的地方，和页图版的书名图一样大
+TITLE_BOX = (72, 176)
+#: 书名一行一个标签，行距由页面定：原生文字调不了行距，一列一个标签的话 20 号要隔 29 像素一行，太松。
+#: 字号固定 20，行距 24，和页图版书名图 20 号时一样，一列放 7 个字
+TITLE_SIZE, TITLE_PITCH = 20, 24
+TITLE_ROWS = TITLE_BOX[1] // TITLE_PITCH
+_FULLWIDTH = str.maketrans({c: chr(ord(c) + 0xFEE0) for c in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"})
+
+
+@lru_cache(maxsize=64)
+def title_rows(title: str) -> tuple[str, ...]:
+    """左栏竖排书名，从上到下每行的文字（TITLE_ROWS 行，没字的行是空串）。页面每行一个居中的标签，只会照着显示。
+
+    规则照页图版的书名图（pager._title_layout）：一列放得下就一列；放不下排两列，“书名 - 作者”优先各占一列；
+    实在放不下才省略。两列时一行是“左字、全角空格、右字”，哪边没字用全角空格占位，整行居中，两列的字就上下对齐。
+    英文字母和数字比汉字窄，两列时换成全角的，不然这一行的两个字会往中间挤。
+    """
+    space = "\u3000"
+    head, _, tail = title.partition(" - ")
+    head, tail = ("".join(c for c in "".join(part.split()) if c not in INVISIBLE) for part in (head, tail))
+    whole = head + tail
+    n = TITLE_ROWS
+    if not tail and len(head) <= n:
+        rows = list(head)
+    else:
+        if tail and len(head) <= n and len(tail) <= n:
+            left, right = head, tail
+        elif len(whole) <= n * 2:
+            half = (len(whole) + 1) // 2
+            left, right = whole[:half], whole[half:]
+        else:
+            left, right = whole[:n], whole[n:n * 2 - 1] + "…"
+        left, right = left.translate(_FULLWIDTH), right.translate(_FULLWIDTH)
+        rows = [(left[i] if i < len(left) else space) + space + (right[i] if i < len(right) else space)
+                for i in range(max(len(left), len(right)))]
+    return tuple(rows + [""] * (n - len(rows)))
 
 
 def lines_per_page(size: int) -> int:
@@ -672,7 +712,6 @@ class AgentSession:
         self.pace = self.library.display.pace
         self.optics = self.library.display.optics
         self.mark = self.library.display.mark
-        self.image_prefix = str(result["u"])
         self._load_position()
         out = self._refresh(opening=not self.page_uuid)
         return [*out, self.speak(result["message"])]
@@ -1109,7 +1148,7 @@ class AgentSession:
         data: dict[str, Any] = {
             "tb": PAGE_TABLES,  # 放在一个键里：内核的数据键最多 64 个，见 research.md §11.22
             "t": self.book.title,
-            "u": self.image_prefix,
+            "tr": [{"n": row} for row in title_rows(self.book.title)],  # 左栏竖排书名每行的字，换书才变；数组只能整个发
             "bv": brightness,
             "lv": (100 - brightness) // 10,
             "ob": self.optics,

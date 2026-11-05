@@ -1,8 +1,9 @@
-"""MCP 工具：``list_books`` / ``open_book`` / ``jump`` / ``reading_status``（docs/research.md §4.6）。
+"""MCP 工具：``list_books`` / ``open_book`` / ``jump`` / ``reading_status`` / ``set_font_size``（docs/research.md §4.6）。
 
 只管“打开哪本、跳到哪”这类偶发操作；翻页在眼镜页面里完成，不经过大模型（research §0 第 1 条）。
+语音说“下一页”“字大一点”也能做（``jump`` 的 ``pages``、``set_font_size``），但要等大模型几秒、再重开页面，镜腿还是快得多。
 
-- ``open_book`` / ``jump`` 返回页面要的三个字段 ``u``（页图地址前缀，带新会话号）、``t``（书名）和
+- ``open_book`` / ``jump`` / ``set_font_size`` 返回页面要的三个字段 ``u``（页图地址前缀，带新会话号）、``t``（书名）和
   ``s``（当前显示设置），由大模型照抄进 ``UI页面渲染(templateName="reader", dataSource={"u", "t", "s"})``（skill/SKILL.md）。
   每次都换新会话号：内核按完整 URL 缓存页图，电脑端按会话记计数基线（research §4.2）。
 - 平台把 MCP 出参只当 ``content[0].text`` 交给模型（glasscast research §9.5），所以返回体是扁平的 JSON 对象；
@@ -28,6 +29,7 @@ from . import __version__
 from .book import Book
 from .config import Settings
 from .library import Entry, Library, View, new_session_id
+from .pager import FONT_SIZES
 
 __all__ = [
     "SERVER_INSTRUCTIONS",
@@ -42,14 +44,14 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-TOOL_NAMES: tuple[str, ...] = ("list_books", "open_book", "jump", "reading_status")
+TOOL_NAMES: tuple[str, ...] = ("list_books", "open_book", "jump", "reading_status", "set_font_size")
 #: list_books 最多列几本（念给用户听的 message 只念前 5 本）
 MAX_LIST = 20
 
 SERVER_INSTRUCTIONS = (
-    "在千问 AI 眼镜上看电脑里的 TXT 小说。open_book / jump 成功后，必须用平台的 UI 页面渲染工具打开页面："
+    "在千问 AI 眼镜上看电脑里的 TXT 小说。open_book / jump / set_font_size 成功后，必须用平台的 UI 页面渲染工具打开页面："
     'templateName="reader"，dataSource={"u": 返回的 u, "t": 返回的 t, "s": 返回的 s}，三个字段原样照抄。'
-    "翻页、开菜单都在眼镜上用镜腿完成，不要为了翻页调用工具。"
+    "翻页、开菜单一般在眼镜上用镜腿完成；用户说“下一页”“上一页”时才用 jump 的 pages 翻页，不要自己连续翻页。"
 )
 
 
@@ -74,7 +76,7 @@ class ListBooksResult(TypedDict, total=False):
 
 
 class BookResult(TypedDict, total=False):
-    """open_book / jump 的返回体。成功时 u、t 齐全；失败时 success=false、message（可念）、candidates（可能的书名）。"""
+    """open_book / jump / set_font_size 的返回体。成功时 u、t 齐全；失败时 success=false、message（可念）、candidates（可能的书名）。"""
 
     success: Required[bool]
     message: Required[str]
@@ -242,6 +244,7 @@ class ReaderTools:
             return {"success": False, "message": "没听清要跳到哪里", "error": error}
         if not chapter_text and pct is None and not delta:
             return {"success": False, "message": "要跳到第几章，还是百分之多少？", "error": "nothing to jump to"}
+        start = self.library.view(book).offset
         v = self.library.jump(book, chapter=chapter_text or None, percent=pct, pages=delta)
         if v is None:
             names = [c.title for c in book.chapters][:5]
@@ -256,9 +259,46 @@ class ReaderTools:
             msg = f"已跳到{ch_title}"
         elif pct is not None:
             msg = f"已跳到{book.percent(v.offset)}%，{ch_title}"
+        elif v.offset == start:  # 只翻页又没动：到书头或书尾了。不重开页面，页面还是原样
+            end = "最后一页" if delta > 0 else "第一页"
+            return {"success": False, "message": f"已经是{end}了", "error": "at the end of the book"}
+        elif abs(delta) == 1:
+            msg = f"已翻到{'下' if delta > 0 else '上'}一页"
         else:
             msg = f"已往{'后' if delta > 0 else '前'}翻{abs(delta)}页"
         return self._book_result(v, msg)
+
+    def set_font_size(self, title: Any = "", change: Any = None, size: Any = None) -> BookResult:
+        """语音调字号：change 是大几档（负数是小几档，每档 2），size 是直接定的字号。字号跟着书存，读到的字不变。"""
+        entry, failure = self._pick("" if title is None else str(title))
+        if failure:
+            return failure
+        assert entry is not None
+        book = self._load(entry)
+        if isinstance(book, dict):
+            return book
+        try:
+            steps = None if change in (None, "") else int(float(str(change)))
+            wanted = None if size in (None, "") else float(str(size))
+        except ValueError:
+            return {"success": False, "message": "没听清字号要调多少", "error": f"bad change/size: {change!r} {size!r}"}
+        offset, current = self.library.position(book)
+        if wanted is not None:
+            new = min(FONT_SIZES, key=lambda s: (abs(s - wanted), -s))  # 不是整档就取最近的一档，一样近取大的
+        elif steps:
+            i = FONT_SIZES.index(current)
+            new = FONT_SIZES[min(max(i + steps, 0), len(FONT_SIZES) - 1)]
+        else:
+            return {"success": False, "message": "字要大一点还是小一点？", "error": "nothing to change"}
+        if new == current:  # 没变就不重开页面
+            if wanted is None:
+                msg = "已经是最大的字号了" if steps > 0 else "已经是最小的字号了"
+            else:
+                msg = f"字号已经是{new}了"
+            return {"success": False, "message": msg, "error": "font size unchanged"}
+        v = self.library.view(book, offset, new)
+        self.library.save(replace(v, offset=offset))  # 和 open_book 一样存原来的字，不退回页首
+        return self._book_result(v, f"字号调到{new}")
 
     def reading_status(self, title: Any = "") -> StatusResult:
         entry, failure = self._pick("" if title is None else str(title))
@@ -299,9 +339,15 @@ OPEN_BOOK_DESCRIPTION = (
 )
 JUMP_DESCRIPTION = (
     "跳到某一章、某个百分比，或往前 / 往后翻几页。用户说“跳到第三章”“看下一章”“回到上一章”“从夜渡那章开始”"
-    "“跳到一半”“回到开头”“往后翻五页”时调用。title 留空 = 当前在读的书。"
+    "“跳到一半”“回到开头”“往后翻五页”“下一页”“上一页”时调用。title 留空 = 当前在读的书。"
     "chapter：章节号或标题片段，如“第三章”“3”“夜渡”，也可以是“下一章”“上一章”；"
-    "percent：0～100（“开头”= 0，“一半”= 50）；pages：往后翻为正、往前翻为负。三者给一个。"
+    "percent：0～100（“开头”= 0，“一半”= 50）；pages：往后翻为正、往前翻为负（“下一页”= 1，“上一页”= -1）。三者给一个。"
+    '成功后同样要用 UI 页面渲染工具重新打开页面：templateName="reader"，dataSource={"u": 返回的 u, "t": 返回的 t, "s": 返回的 s}。'
+)
+SET_FONT_SIZE_DESCRIPTION = (
+    "调眼镜上正文的字号（16～32，每档 2）。用户说“字大一点”“字小一点”“字再大点”“把字调大”“字号调到 28”时调用。"
+    "change：大几档为正、小几档为负，“大一点”= 1，“大很多”= 3；size：直接定的字号。二者给一个。title 留空 = 当前在读的书。"
+    "只管字号，不管亮度。"
     '成功后同样要用 UI 页面渲染工具重新打开页面：templateName="reader"，dataSource={"u": 返回的 u, "t": 返回的 t, "s": 返回的 s}。'
 )
 READING_STATUS_DESCRIPTION = (
@@ -318,15 +364,18 @@ ChapterParam = Annotated[Any, WithJsonSchema(
 PercentParam = Annotated[Any, WithJsonSchema(
     {"type": "number", "minimum": 0, "maximum": 100, "description": "全书百分比"})]
 PagesParam = Annotated[Any, WithJsonSchema({"type": "integer", "description": "往后翻为正，往前翻为负"})]
+ChangeParam = Annotated[Any, WithJsonSchema({"type": "integer", "description": "大几档为正，小几档为负，“大一点”= 1"})]
+SizeParam = Annotated[Any, WithJsonSchema(
+    {"type": "integer", "minimum": 16, "maximum": 32, "description": "直接定的字号，16～32"})]
 
 
 def build_mcp_server(settings: Settings, library: Library, *, tools: ReaderTools | None = None) -> MCPServer:
-    """创建注册好 4 个工具的 MCPServer。每个应用新建一个（SDK 的 session manager 只能 run 一次）。"""
+    """创建注册好 5 个工具的 MCPServer。每个应用新建一个（SDK 的 session manager 只能 run 一次）。"""
     ctl = tools or ReaderTools(settings, library)
     server = MCPServer(
         "glassreader",
         title="眼镜看小说",
-        description="在千问 AI 眼镜上看电脑里的 TXT 小说：书架、打开、跳章、查进度",
+        description="在千问 AI 眼镜上看电脑里的 TXT 小说：书架、打开、跳章、查进度、调字号",
         instructions=SERVER_INSTRUCTIONS,
         version=__version__,
     )
@@ -372,5 +421,13 @@ def build_mcp_server(settings: Settings, library: Library, *, tools: ReaderTools
             return await anyio.to_thread.run_sync(ctl.reading_status, title)
         except Exception as exc:  # noqa: BLE001
             return failure("reading_status", exc)  # type: ignore[return-value]
+
+    @server.tool(name="set_font_size", title="调字号", description=SET_FONT_SIZE_DESCRIPTION,
+                 annotations=annotations("调字号", False))
+    async def set_font_size(title: TitleParam = "", change: ChangeParam = None, size: SizeParam = None) -> BookResult:
+        try:
+            return await anyio.to_thread.run_sync(ctl.set_font_size, title, change, size)
+        except Exception as exc:  # noqa: BLE001
+            return failure("set_font_size", exc)  # type: ignore[return-value]
 
     return server
